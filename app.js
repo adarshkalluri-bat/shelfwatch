@@ -34,11 +34,11 @@ const IC={
 };
 
 /* ---------- state ---------- */
-const S={ready:false,noDb:false,readOnly:false,stores:{},products:{},entries:{},visits:{},cfg:{},photoCache:{},
+const S={ready:false,noDb:false,readOnly:false,stores:{},products:{},entries:{},visits:{},weeks:{},cfg:{},photoCache:{},
   tab:'home',page:null,pf:{q:'',store:'all',buyer:'all',status:'all',sort:'recent'},ins:{store:'all'},activeVisit:null,visitMine:true};
 let db=null,assets=null,downloads=null,userCap=null;
 const ls={get(k,d){try{const v=localStorage.getItem('sw:'+k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem('sw:'+k,JSON.stringify(v))}catch(e){}}};
-S.me=ls.get('me','');S.activeVisit=ls.get('activeVisit',null);S.visitMine=ls.get('visitMine',true);
+S.me=ls.get('me','');S.pf.view=ls.get('pview','cards');S.ins.tab='review';S.activeVisit=ls.get('activeVisit',null);S.visitMine=ls.get('visitMine',true);
 
 /* ---------- helpers ---------- */
 const $=s=>document.querySelector(s);
@@ -65,6 +65,22 @@ function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');cl
 function photoSrc(ref){return PLATFORM.photoUrl(ref)}
 const img=(ref,cls,extra)=>ref?`<img ${cls?`class="${cls}"`:''} data-ph="${esc(ref)}" src="${esc(photoSrc(ref))}" alt="" loading="lazy" ${extra||''}>`:'';
 
+/* ---------- v1.2: rules, pricing, weekly plan, VMM plan ---------- */
+const APP_VERSION='1.2';
+const rules=()=>Object.assign({minWeeks:4,needSignals:2,noDiscount:true},S.cfg.rules||{});
+const REASONS=['Vendor meeting','Leave','Office work','Other store visit'];
+const reasons=()=>(S.cfg.reasons&&S.cfg.reasons.length?S.cfg.reasons:REASONS);
+const listOf=k=>k==='team'?team():k==='fixtures'?fixtures():k==='reasons'?reasons():purposes();
+const rupee=n=>'₹'+(+n).toLocaleString('en-IN',{maximumFractionDigits:2});
+const iso=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+const addDays=(s,n)=>{const d=pd(s);d.setDate(d.getDate()+n);return iso(d)};
+const weekStart=s=>addDays(s,-((pd(s).getDay()+6)%7));
+const cmpName=s=>norm(s).replace(/ /g,'');
+const PIPE={watching:['Watching',''],candidate:['Candidate','tint'],decide:['Best seller',  'gold'],pursue:['Pursuing','good'],wip:['In development','good'],launched:['Launched','good'],notpursuing:['Not pursuing',''],dropped:['Dropped','bad'],not:['Not a best seller','']};
+const PIPE_ORDER=['watching','candidate','decide','pursue','wip','launched','notpursuing','dropped'];
+const PIPE_LONG={watching:'Watching',candidate:'Candidate',decide:'Awaiting decision',pursue:'Pursuing',wip:'In development',launched:'Launched',notpursuing:'Not pursuing',dropped:'Dropped'};
+
+
 /* ---------- derived ---------- */
 function entriesOf(pid){return Object.values(S.entries).filter(e=>e.productId===pid).sort((a,b)=>(a.date||'').localeCompare(b.date||'')||(a.at||0)-(b.at||0))}
 let _idx=null;
@@ -81,12 +97,14 @@ function cover(p){const a=ents(p.id);for(let i=a.length-1;i>=0;i--){if(a[i].phot
 function allPhotos(p){const out=[];const a=ents(p.id);for(let i=a.length-1;i>=0;i--)(a[i].photos||[]).forEach(x=>out.push(x));if(!out.length&&p.cover)out.push(p.cover);return out}
 function diff(prev,cur){
   const ch=[];if(!prev)return [{k:'new',t:'First logged'}];
-  if(norm(prev.price)!==norm(cur.price)&&cur.price){const a=priceNum(prev.price),b=priceNum(cur.price);ch.push({k:'price',t:fmtPrice(prev.price)+' → '+fmtPrice(cur.price),dir:(a!=null&&b!=null)?(b>a?'up':b<a?'down':''):''})}
+  const pc=priceChange(prev,cur);if(pc)ch.push(pc);
   if(norm(prev.fixture)!==norm(cur.fixture)&&cur.fixture)ch.push({k:'fixture',t:(prev.fixture||'—')+' → '+cur.fixture});
   if((prev.status||'on-floor')!==(cur.status||'on-floor'))ch.push({k:'status',t:(STATUS_BY[cur.status]||{}).label||cur.status,tone:(STATUS_BY[cur.status]||{}).tone});
   if(cur.observation&&norm(prev.observation)!==norm(cur.observation))ch.push({k:'obs',t:'New observation'});
   return ch;
 }
+
+/* VMM plan */
 function weeksOnFloor(p){
   const a=ents(p.id);if(!a.length)return 0;
   const first=p.firstSeen||a[0].date;let last=null;
@@ -94,16 +112,17 @@ function weeksOnFloor(p){
   if(!last)return 0;return Math.max(0,Math.floor(daysBetween(first,last)/7));
 }
 function bsEval(p){
-  const a=ents(p.id);const l=a[a.length-1];const w=weeksOnFloor(p);
-  const m1=w>=3;const liq=a.some(e=>e.status==='on-sale');const m2=!liq;
+  const R=rules();const a=ents(p.id);const l=a[a.length-1];const w=weeksOnFloor(p);
+  const m1=w>=R.minWeeks;const liq=a.some(e=>e.status==='on-sale');const m2=R.noDiscount?!liq:true;
   const bs=p.bs||{};const opt=OPTIONAL.filter(o=>bs[o.k]).length;
   let stage='watching',label='Watching',tone='';
+  const why=`${w} week${w===1?'':'s'} on floor (needs ${R.minWeeks}) · ${liq?'discount seen':'no discount'} · ${opt} of ${R.needSignals} signals`;
   if(l&&l.status==='removed'){stage='dropped';label='Dropped';tone='bad'}
   else if(p.bsVerdict==='yes'){stage='best';label='Best seller';tone='gold'}
   else if(p.bsVerdict==='no'){stage='not';label='Not a best seller';tone=''}
-  else if(m1&&m2&&opt>=2){stage='likely';label='Likely best seller';tone='good'}
+  else if(m1&&m2&&opt>=R.needSignals){stage='best';label='Best seller';tone='gold'}
   else if(m1&&m2){stage='candidate';label='Candidate';tone='tint'}
-  return {w,m1,m2,liq,opt,stage,label,tone};
+  return {w,m1,m2,liq,opt,stage,label,tone,why,R};
 }
 function visitsOfStore(sid){return Object.values(S.visits).filter(v=>v.storeId===sid).sort((a,b)=>(a.date||'').localeCompare(b.date||''))}
 function lastVisitAny(){const v=Object.values(S.visits).sort((a,b)=>(b.date||'').localeCompare(a.date||'')||(b.at||0)-(a.at||0));return v[0]||null}
@@ -158,47 +177,51 @@ function viewHome(){
   let h=topbar('Shelfwatch','',meBtn)+`<h1 class="lt">Shelfwatch</h1><p class="sub">${S.me?'Hi '+esc(S.me)+'. ':''}Competitor store benchmarking for Household.</p>`;
   if(!S.ready)return h+notReady();
   h+=syncPill();
+  const mon=weekStart(today());const wi=weekInfo(mon);const vd=visitDay(mon);
   const av=S.activeVisit&&S.visits[S.activeVisit];
   if(av){const done=visitProgress(av);
     h+=`<div class="hero"><div class="live"><i></i>Visit in progress</div><div><h3>${esc(storeName(av.storeId))}</h3><p>${esc(fd(av.date,'dow'))} · ${done.done} of ${done.total} products checked</p></div><button class="btn" data-act="open-visit" data-id="${av.id}">Continue visit</button></div>`;
   }else{
-    h+=`<div class="hero"><div><h3>Going to a store?</h3><p>Start a visit and update each product in a few taps. Last time’s details are filled in for you.</p></div><button class="btn" data-act="tab" data-tab="visit">${IC.plus} Start a store visit</button></div>`;
+    const names=wi.planned.map(s=>storeShort(s.sid)).join(', ');
+    h+=`<div class="hero"><div><div class="live" style="margin-bottom:6px">This week · ${esc(fd(vd,'dow'))}</div><h3>${esc(wi.round.name?wi.round.name+' round':'Store visit')}</h3><p>${wi.planned.length?esc(names)+'. '+wi.covered+' of '+wi.planned.length+' covered so far.':'Start a visit and update each product in a few taps.'}</p></div><button class="btn" data-act="tab" data-tab="visit">${IC.plus} Start a store visit</button></div>`;
   }
-  const ps=activeProducts();const evs=ps.map(p=>[p,bsEval(p)]);
-  const cnt=k=>evs.filter(x=>x[1].stage===k).length;
-  const openActions=ps.filter(p=>p.action&&p.action.text&&!p.action.done).length;
+  const ps=activeProducts();const pk=ps.map(p=>pipe(p));const n=k=>pk.filter(x=>x===k).length;
   h+=`<div class="sec"><h2>At a glance</h2></div><div class="tiles">
     <button class="tile tap" data-act="goprod" data-status="all"><span class="k">Products tracked</span><span class="v">${ps.length}</span></button>
-    <button class="tile tap" data-act="goprod" data-status="best"><span class="k"><i style="background:var(--gold)"></i>Best sellers</span><span class="v">${cnt('best')+cnt('likely')}</span></button>
-    <button class="tile tap" data-act="goprod" data-status="candidate"><span class="k"><i style="background:var(--tint)"></i>Candidates</span><span class="v">${cnt('candidate')}</span></button>
-    <button class="tile tap" data-act="goprod" data-status="action"><span class="k"><i style="background:var(--warn)"></i>Open actions</span><span class="v">${openActions}</span></button></div>`;
-  // recent changes
+    <button class="tile tap" data-act="goprod" data-status="decide"><span class="k"><i style="background:var(--gold)"></i>Need a decision</span><span class="v">${n('decide')}</span></button>
+    <button class="tile tap" data-act="goprod" data-status="pursue"><span class="k"><i style="background:var(--good)"></i>Being pursued</span><span class="v">${n('pursue')+n('wip')}</span></button>
+    <button class="tile tap" data-act="goprod" data-status="launched"><span class="k"><i style="background:var(--tint)"></i>Launched</span><span class="v">${n('launched')}</span></button></div>`;
   const lv=lastVisitAny();
   h+=`<div class="cols"><div>`;
   if(lv){
-    const ch=changesForVisit(lv.id).filter(c=>c.ch.some(x=>x.k!=='obs'||true));
+    const ch=changesForVisit(lv.id);
     h+=`<div class="sec"><h2>Last visit</h2><button class="lnk" data-act="open-visit" data-id="${lv.id}">Open</button></div><p class="foot" style="margin:0 4px 8px">${esc(storeName(lv.storeId))} · ${esc(fd(lv.date,'dow'))}</p>`;
     const shown=ch.filter(c=>c.ch.length&&!(c.ch.length===1&&c.ch[0].k==='obs')).slice(0,6);
-    const nP=ch.filter(c=>c.ch.some(x=>x.k==='price')).length,nF=ch.filter(c=>c.ch.some(x=>x.k==='fixture')).length,nN=ch.filter(c=>c.ch.some(x=>x.k==='new')).length,nO=ch.filter(c=>c.ch.some(x=>x.k==='obs')).length;
+    const nP=ch.filter(c=>c.ch.some(x=>x.k==='price')).length,nN=ch.filter(c=>c.ch.some(x=>x.k==='new')).length,nO=ch.filter(c=>c.ch.some(x=>x.k==='obs')).length;
     h+=`<div class="facts" style="margin:0 0 10px;grid-template-columns:repeat(4,minmax(0,1fr))"><div><span class="k">Checked</span><span class="v">${ch.length}</span></div><div><span class="k">New</span><span class="v">${nN}</span></div><div><span class="k">Price</span><span class="v">${nP}</span></div><div><span class="k">Notes</span><span class="v">${nO}</span></div></div>`;
     const list=shown.length?shown:ch.slice(0,6);
     h+=list.length?`<div class="group">${list.map(c=>prodRow(c.p,changeLine(c.ch))).join('')}</div>`:`<div class="note">No updates logged at this visit yet.</div>`;
   }
   h+=`</div><div>`;
-  // needs revisit
-  const stale=ps.map(p=>[p,latest(p.id)]).filter(([p,l])=>l&&l.status!=='removed'&&daysBetween(l.date,today())>=21).sort((a,b)=>a[1].date.localeCompare(b[1].date)).slice(0,6);
+  const dec=ps.filter(p=>pipe(p)==='decide').slice(0,5);
+  if(dec.length)h+=`<div class="sec"><h2>Decide: pursue or not?</h2><button class="lnk" data-act="goprod" data-status="decide">All</button></div><div class="group">${dec.map(p=>prodRow(p,storeShort(p.storeId)+' · '+(priceText(latest(p.id))||'Price needed')+' · '+bsEval(p).w+' weeks on floor')).join('')}</div>`;
+  const od=ps.filter(isOverdue).slice(0,5);
+  if(od.length)h+=`<div class="sec"><h2>Past the target date</h2></div><div class="group">${od.map(p=>prodRow(p,(vmmOf(p).next||'No next step written')+' · due '+fd(vmmOf(p).target))).join('')}</div>`;
+  const stale=ps.map(p=>[p,latest(p.id)]).filter(([p,l])=>l&&l.status!=='removed'&&daysBetween(l.date,today())>=21).sort((a,b)=>a[1].date.localeCompare(b[1].date)).slice(0,5);
   h+=`<div class="sec"><h2>Due for a revisit</h2></div>`;
   h+=stale.length?`<div class="group">${stale.map(([p,l])=>prodRow(p,'Last seen '+rel(l.date)+' · '+storeShort(p.storeId))).join('')}</div>`:`<div class="note">Everything has been checked in the last three weeks.</div>`;
-  const acts=ps.filter(p=>p.action&&p.action.text&&!p.action.done).slice(0,5);
-  if(acts.length){h+=`<div class="sec"><h2>Actions to close</h2></div><div class="group">${acts.map(p=>prodRow(p,(p.action.text)+(p.action.due?' · due '+fd(p.action.due):''))).join('')}</div>`}
+  const np=ps.filter(needsPrice).length;
+  if(np)h+=`<button class="note tap" style="margin-top:12px;width:100%;text-align:left" data-act="goprod" data-status="price"><b style="color:var(--warn)">${np} product${np>1?'s have':' has'} no MRP recorded.</b> Tap to see the list and fill it in at the next visit.</button>`;
   h+=`</div></div>`;
   return h;
 }
 function changeLine(ch){return ch.filter(c=>c.k!=='obs').map(c=>c.t).join(' · ')||(ch.length?'Observation updated':'')}
 function prodRow(p,meta){
-  const ev=bsEval(p);
-  return `<button class="row th" data-act="product" data-id="${p.id}"><span class="thumb">${img(cover(p))||IC.img}</span><span class="grow"><div class="ttl">${esc(p.name)}</div><div class="meta">${esc(meta)}</div></span>${ev.stage!=='watching'?`<span class="pill ${ev.tone}">${esc(ev.label)}</span>`:''}${IC.chev}</button>`;
+  const b=badge(p);
+  return `<button class="row th" data-act="product" data-id="${p.id}"><span class="thumb">${img(cover(p))||IC.img}</span><span class="grow"><div class="ttl">${esc(p.name)}</div><div class="meta">${esc(meta)}</div></span>${b.k!=='watching'?`<span class="pill ${b.tone}">${esc(b.label)}</span>`:''}${IC.chev}</button>`;
 }
+
+/* ---------- Products ---------- */
 function changesForVisit(vid){
   const out=[];
   for(const e of Object.values(S.entries)){if(e.visitId!==vid)continue;const p=S.products[e.productId];if(!p)continue;out.push({p,e,ch:diff(prevOf(p.id,e),e)})}
@@ -215,11 +238,11 @@ function viewProducts(){
   const stores=Object.values(S.stores).sort((a,b)=>a.name.localeCompare(b.name));
   h+=`<div class="chips">${chip('store','all','All stores',f.store)}${stores.map(s=>chip('store',s.id,s.name+(s.location?' '+s.location:''),f.store)).join('')}</div>`;
   h+=`<div class="chips" style="margin-top:6px">${chip('buyer','all','Everyone',f.buyer)}${team().map(t=>chip('buyer',t,t,f.buyer)).join('')}</div>`;
-  h+=`<div class="chips" style="margin-top:6px">${[['all','All'],['best','Best sellers'],['candidate','Candidates'],['watching','Watching'],['action','Open actions'],['dropped','Dropped'],['archived','Archived']].map(([k,l])=>chip('status',k,l,f.status)).join('')}</div>`;
-  const list=filteredProducts();
-  h+=`<div style="display:flex;justify-content:space-between;align-items:center;margin:16px 2px 10px"><span class="foot" style="margin:0">${list.length} product${list.length===1?'':'s'}</span><div class="seg" style="width:220px">${[['recent','Recent'],['name','A–Z'],['weeks','Weeks']].map(([k,l])=>`<button data-act="psort" data-k="${k}" class="${f.sort===k?'on':''}">${l}</button>`).join('')}</div></div>`;
+  h+=`<div class="chips" style="margin-top:6px">${[['all','All'],['watching','Watching'],['candidate','Candidates'],['decide','Need a decision'],['pursue','Being pursued'],['launched','Launched'],['notpursuing','Not pursuing'],['price','Price needed'],['dropped','Dropped'],['archived','Archived']].map(([k,l])=>chip('status',k,l,f.status)).join('')}</div>`;
+  const list=filteredProducts();const table=f.view==='table'&&window.innerWidth>=760;
+  h+=`<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin:16px 2px 10px;flex-wrap:wrap"><span class="foot" style="margin:0">${list.length} product${list.length===1?'':'s'}</span><div style="display:flex;gap:8px;align-items:center"><div class="seg wide-only" style="width:150px">${[['cards','Cards'],['table','Table']].map(([k,l])=>`<button data-act="pview" data-k="${k}" class="${(f.view||'cards')===k?'on':''}">${l}</button>`).join('')}</div>${table?'':`<div class="seg" style="width:220px">${[['recent','Recent'],['name','A–Z'],['weeks','Weeks']].map(([k,l])=>`<button data-act="psort" data-k="${k}" class="${f.sort===k?'on':''}">${l}</button>`).join('')}</div>`}</div></div>`;
   if(!list.length)return h+emptyState(Object.keys(S.products).length?'No products match':'No products yet',Object.keys(S.products).length?'Try a different search or filter.':'Start a store visit and add the first product you spot.');
-  h+=`<div class="pgrid">${list.map(pcard).join('')}</div>`;
+  h+=table?ptable(list):`<div class="pgrid">${list.map(pcard).join('')}</div>`;
   return h;
 }
 function chip(grp,val,label,cur){return `<button class="chip ${cur===val?'on':''}" data-act="pf" data-g="${grp}" data-v="${esc(val)}">${esc(label)}</button>`}
@@ -228,9 +251,11 @@ function filteredProducts(){
   let list=Object.values(S.products).filter(p=>f.status==='archived'?p.archived:!p.archived);
   if(f.store!=='all')list=list.filter(p=>p.storeId===f.store);
   if(f.buyer!=='all')list=list.filter(p=>p.buyer===f.buyer);
-  if(q)list=list.filter(p=>norm([p.name,p.category,p.brand,p.purpose,storeName(p.storeId)].join(' ')).includes(q));
-  if(['best','candidate','watching','dropped'].includes(f.status))list=list.filter(p=>{const s=bsEval(p).stage;return f.status==='best'?(s==='best'||s==='likely'):s===f.status});
-  if(f.status==='action')list=list.filter(p=>p.action&&p.action.text&&!p.action.done);
+  if(q)list=list.filter(p=>norm([p.name,p.category,p.brand,p.purpose,storeName(p.storeId),vmmOf(p).article].join(' ')).includes(q));
+  if(['watching','candidate','decide','launched','notpursuing','dropped'].includes(f.status))list=list.filter(p=>pipe(p)===f.status);
+  if(f.status==='best')list=list.filter(p=>bsEval(p).stage==='best');
+  if(f.status==='pursue'||f.status==='action')list=list.filter(p=>['pursue','wip'].includes(pipe(p)));
+  if(f.status==='price')list=list.filter(needsPrice);
   const ld=p=>(latest(p.id)||{}).date||'';
   if(f.sort==='name')list.sort((a,b)=>a.name.localeCompare(b.name));
   else if(f.sort==='weeks')list.sort((a,b)=>weeksOnFloor(b)-weeksOnFloor(a));
@@ -238,50 +263,77 @@ function filteredProducts(){
   return list;
 }
 function pcard(p){
-  const l=latest(p.id)||{};const ev=bsEval(p);const c=cover(p);
+  const l=latest(p.id)||{};const b=badge(p);const c=cover(p);const pt=priceText(l);
   const st=l.status&&l.status!=='on-floor'?STATUS_BY[l.status]:null;
-  return `<button class="pcard tap" data-act="product" data-id="${p.id}"><div class="ph">${c?img(c):IC.img}${ev.stage!=='watching'?`<span class="pill ${ev.tone||''}">${esc(ev.label)}</span>`:''}</div><div class="bd"><div class="nm">${esc(p.name)}</div><div class="mt">${esc(storeShort(p.storeId))} · ${esc(p.buyer||'')}</div><div class="pr">${esc(fmtPrice(l.price))}</div><div class="mt">${st?`<span style="color:var(--${st.tone||'label2'})">${esc(st.label)}</span> · `:''}${l.date?esc(rel(l.date)):'Not logged'}</div></div></button>`;
+  return `<button class="pcard tap" data-act="product" data-id="${p.id}"><div class="ph">${c?img(c):IC.img}${b.k!=='watching'?`<span class="pill ${b.tone||''}">${esc(b.label)}</span>`:''}</div><div class="bd"><div class="nm">${esc(p.name)}</div><div class="mt">${esc(storeShort(p.storeId))} · ${esc(p.buyer||'')}</div><div class="pr"${pt?'':' style="color:var(--warn);font-weight:500"'}>${pt?esc(pt):'Price needed'}</div><div class="mt">${st?`<span style="color:var(--${st.tone||'label2'})">${esc(st.label)}</span> · `:''}${l.date?esc(rel(l.date)):'Not logged'}</div></div></button>`;
 }
 
 /* ---------- Product detail ---------- */
 function viewProduct(pid){
   const p=S.products[pid];
   if(!p)return topbar('',`<button class="lnk" data-act="back">${IC.back} Back</button>`)+emptyState('Product not found','It may have been deleted.');
-  const a=ents(pid);const l=a[a.length-1]||{};const prev=a.length>1?a[a.length-2]:null;const ev=bsEval(p);const ph=allPhotos(p);
+  const a=ents(pid);const l=a[a.length-1]||{};const prev=a.length>1?a[a.length-2]:null;const ev=bsEval(p);const ph=allPhotos(p);const b=badge(p);const v=vmmOf(p);const pr=pricing(l);const pt=priceText(l);
   let h=topbar(p.name,`<button class="lnk" data-act="back">${IC.back} Back</button>`,`<button class="lnk" data-act="edit-product" data-id="${pid}">Edit</button>`);
   h+=`<div class="page-enter"><div class="cols" style="align-items:start"><div>`;
-  h+=`<div class="dhero">${ph.length?`<div class="strip" id="strip">${ph.map((r,i)=>img(r,'',`data-act="zoom" data-ref="${esc(r)}"`)).join('')}</div>${ph.length>1?`<span class="cnt">${ph.length} photos</span>`:''}`:`<div class="none">${IC.img}</div>`}</div>`;
+  h+=`<div class="dhero">${ph.length?`<div class="strip" id="strip">${ph.map(r=>img(r,'',`data-act="zoom" data-ref="${esc(r)}"`)).join('')}</div>${ph.length>1?`<span class="cnt">${ph.length} photos</span>`:''}`:`<div class="none">${IC.img}</div>`}</div>`;
   h+=`</div><div>`;
-  h+=`<div class="dname">${esc(p.name)}</div><div class="foot" style="margin:0 0 10px;font-size:15px">${p.brand&&norm(p.brand)!==norm(storeShort(p.storeId))?esc(p.brand)+' · ':''}${esc(storeName(p.storeId))}</div>`;
-  h+=`<div class="pills"><span class="pill ${ev.tone}">${esc(ev.label)}</span>${p.category?`<span class="pill">${esc(p.category)}</span>`:''}${p.purpose?`<span class="pill tint">${esc(p.purpose)}</span>`:''}<span class="pill"><span class="av" style="width:16px;height:16px;font-size:8px;background:${avColor(p.buyer)}">${esc(initials(p.buyer))}</span>${esc(p.buyer||'—')}</span>${p.archived?'<span class="pill bad">Archived</span>':''}</div>`;
-  const pa=prev?priceNum(prev.price):null,pb=priceNum(l.price);
-  const pdir=(pa!=null&&pb!=null&&pa!==pb)?`<span class="d ${pb>pa?'up':'down'}">${pb>pa?'▲':'▼'} from ${esc(fmtPrice(prev.price))}</span>`:'';
-  h+=`<div class="facts"><div><span class="k">Price</span><span class="v">${esc(fmtPrice(l.price))}</span>${pdir}</div><div><span class="k">Fixture</span><span class="v" style="font-size:15px">${esc(l.fixture||'—')}</span></div><div><span class="k">Weeks on floor</span><span class="v">${ev.w}</span><span class="d" style="color:var(--label2);font-weight:500">since ${esc(fd(p.firstSeen||(a[0]||{}).date))}</span></div><div><span class="k">Last status</span><span class="v" style="font-size:15px;color:var(--${(STATUS_BY[l.status]||{}).tone||'label'})">${esc((STATUS_BY[l.status]||STATUS_BY['on-floor']).label)}</span><span class="d" style="color:var(--label2);font-weight:500">${l.date?esc(rel(l.date)):''}</span></div></div>`;
+  h+=`<div class="dname">${esc(p.name)}</div><div class="foot" style="margin:0 0 10px;font-size:15px">${p.brand&&cmpName(p.brand)!==cmpName(storeShort(p.storeId))?esc(p.brand)+' · ':''}${esc(storeName(p.storeId))}</div>`;
+  h+=`<div class="pills"><span class="pill ${b.tone}">${esc(b.label)}</span>${p.category?`<span class="pill">${esc(p.category)}</span>`:''}${p.purpose?`<span class="pill tint">${esc(p.purpose)}</span>`:''}<span class="pill"><span class="av" style="width:16px;height:16px;font-size:8px;background:${avColor(p.buyer)}">${esc(initials(p.buyer))}</span>${esc(p.buyer||'—')}</span>${p.archived?'<span class="pill bad">Archived</span>':''}</div>`;
+  const pcg=prev?priceChange(prev,l):null;
+  const pdir=pcg?`<span class="d ${pcg.dir}">${pcg.dir==='up'?'▲ ':pcg.dir==='down'?'▼ ':''}was ${esc(priceText(prev))}</span>`:'';
+  h+=`<div class="facts"><div><span class="k">MRP</span><span class="v"${pt?'':' style="color:var(--warn);font-size:15px"'}>${pt?esc(pt):'Price needed'}</span>${pdir}</div><div><span class="k">Fixture</span><span class="v" style="font-size:15px">${esc(l.fixture||'—')}</span></div><div><span class="k">Weeks on floor</span><span class="v">${ev.w}</span><span class="d" style="color:var(--label2);font-weight:500">since ${esc(fd(p.firstSeen||(a[0]||{}).date))}</span></div><div><span class="k">Last status</span><span class="v" style="font-size:15px;color:var(--${(STATUS_BY[l.status]||{}).tone||'label'})">${esc((STATUS_BY[l.status]||STATUS_BY['on-floor']).label)}</span><span class="d" style="color:var(--label2);font-weight:500">${l.date?esc(rel(l.date)):''}</span></div></div>`;
+  if(pr.mode==='sizes'||(pr.mode==='single'&&pr.variants[0].size))h+=`<div class="cap" style="margin-top:16px">Sizes and MRP</div><div class="group">${pr.variants.map(x=>`<div class="row" style="min-height:42px"><span class="grow">${esc(x.size||'Size not noted')}</span><span class="val" style="color:var(--label);font-weight:600;font-variant-numeric:tabular-nums">${esc(rupee(x.price))}</span></div>`).join('')}</div>`;
   h+=`<div style="margin-top:14px"><button class="btn" data-act="update" data-id="${pid}">${IC.cam} Log an update</button></div>`;
   h+=`</div></div>`;
-  // best seller + action
+  // best seller check + VMM plan
+  const R=ev.R;
   h+=`<div class="cols"><div><div class="cap">Best-seller check</div><div class="group">`;
-  h+=`<div class="verdict"><div class="grow" style="flex:1"><div class="big">${esc(ev.label)}</div><div class="foot" style="margin:2px 0 0">${ev.m1&&ev.m2?'Both must-haves met':'Must-haves not met yet'} · ${ev.opt} of 4 signals</div><div class="meter">${[ev.m1,ev.m2,...OPTIONAL.map(o=>(p.bs||{})[o.k])].map(x=>`<i class="${x?'on':''}"></i>`).join('')}</div></div></div>`;
-  h+=`<div class="check auto ${ev.m1?'on':'off'}"><span class="bx">${ev.m1?IC.check:''}</span><span class="grow"><div>3–4 weeks on floor <span class="pill" style="font-size:11px;padding:1px 6px">Must</span></div><div class="why">${ev.w} week${ev.w===1?'':'s'} so far, worked out from your visits</div></span></div>`;
-  h+=`<div class="check auto ${ev.m2?'on':'off'}"><span class="bx">${ev.m2?IC.check:''}</span><span class="grow"><div>No liquidation or forced discount <span class="pill" style="font-size:11px;padding:1px 6px">Must</span></div><div class="why">${ev.liq?'Marked “On sale / discount” at a visit':'Never marked on sale at any visit'}</div></span></div>`;
+  h+=`<div class="verdict"><div class="grow" style="flex:1"><div class="big">${esc(ev.label)}</div><div class="foot" style="margin:2px 0 0">${esc(ev.why)}</div><div class="meter">${[ev.m1,ev.m2,...OPTIONAL.map(o=>(p.bs||{})[o.k])].map(x=>`<i class="${x?'on':''}"></i>`).join('')}</div></div></div>`;
+  h+=`<div class="check auto ${ev.m1?'on':'off'}"><span class="bx">${ev.m1?IC.check:''}</span><span class="grow"><div>${R.minWeeks} weeks on floor <span class="pill" style="font-size:11px;padding:1px 6px">Must</span></div><div class="why">${ev.w} week${ev.w===1?'':'s'} so far, worked out from your visits</div></span></div>`;
+  h+=`<div class="check auto ${ev.m2?'on':'off'}"><span class="bx">${ev.m2?IC.check:''}</span><span class="grow"><div>No liquidation or forced discount ${R.noDiscount?'<span class="pill" style="font-size:11px;padding:1px 6px">Must</span>':''}</div><div class="why">${ev.liq?'Marked “On sale / discount” at a visit':'Never marked on sale at any visit'}</div></span></div>`;
   h+=OPTIONAL.map(o=>{const on=!!(p.bs||{})[o.k];return `<button class="check ${on?'on':''}" data-act="bs" data-id="${pid}" data-k="${o.k}"><span class="bx">${on?IC.check:''}</span><span class="grow"><div>${esc(o.t)}</div><div class="why">${esc(o.d)}</div></span></button>`}).join('');
-  h+=`</div><div class="seg" style="margin-top:10px">${[['','Auto'],['yes','Confirm best seller'],['no','Not one']].map(([k,l])=>`<button data-act="verdict" data-id="${pid}" data-k="${k}" class="${(p.bsVerdict||'')===k?'on':''}">${l}</button>`).join('')}</div>`;
-  h+=`</div><div><div class="cap">Action for VMM</div><div class="group">`;
-  const ac=p.action||{};
-  h+=`<div class="field"><label for="act-t">Action</label><input id="act-t" data-act-f="text" data-id="${pid}" placeholder="e.g. Develop 3 pastel SKUs" value="${esc(ac.text||'')}"></div>`;
-  h+=`<div class="field"><label for="act-o">Owner</label><select id="act-o" data-act-f="owner" data-id="${pid}"><option value="">Choose</option>${team().map(t=>`<option ${ac.owner===t?'selected':''}>${esc(t)}</option>`).join('')}</select></div>`;
-  h+=`<div class="field"><label for="act-d">Due by</label><input id="act-d" type="date" data-act-f="due" data-id="${pid}" value="${esc(ac.due||'')}"></div>`;
-  h+=`<button class="check ${ac.done?'on':''}" data-act="act-done" data-id="${pid}"><span class="bx">${ac.done?IC.check:''}</span><span class="grow">Action completed</span></button>`;
-  h+=`</div><p class="foot">Saves as you type. Shown on Home until it’s marked complete.</p></div></div>`;
+  h+=`</div><p class="foot">Best seller = both must-haves and any ${R.needSignals} of the 4 signals. Change this in Settings → Best-seller rules.</p><div class="seg" style="margin-top:10px">${[['','By the rules'],['yes','Mark best seller'],['no','Not one']].map(([k,t])=>`<button data-act="verdict" data-id="${pid}" data-k="${k}" class="${(p.bsVerdict||'')===k?'on':''}">${t}</button>`).join('')}</div>`;
+  h+=`</div><div><div class="cap">VMM plan</div>`;
+  const showCmp=v.photos.length||v.equiv==='yes'||v.equiv==='similar'||v.decision==='pursue';
+  if(showCmp){const c=cover(p);
+    h+=`<div class="cmp"><div class="cside"><div class="cph">${c?img(c,'',`data-act="zoom" data-ref="${esc(c)}"`):IC.img}</div><div class="ccap"><b>Seen at ${esc(storeShort(p.storeId))}</b><span>${esc(pt||'Price needed')}</span></div></div><div class="cside"><div class="cph">${v.photos.length?img(v.photos[0],'',`data-act="zoom" data-ref="${esc(v.photos[0])}"`):`<label class="cadd">${IC.cam}<span>Add our product</span><input type="file" accept="image/*" data-act="vmm-file" data-id="${pid}" hidden></label>`}</div><div class="ccap"><b>${v.stage==='launched'&&v.decision==='pursue'?'In our stores':'Our product'}</b><span>${priceNum(v.mrp)!=null?esc(rupee(priceNum(v.mrp))):'MRP not set'}</span></div></div></div>`;
+  }
+  h+=`<div class="group vm"><div class="blk"><div class="bl">Do we have it at VMM?</div><div class="seg">${[['','Not checked'],['yes','Yes'],['similar','Similar'],['no','No']].map(([k,t])=>`<button data-act="pset" data-id="${pid}" data-path="vmm.equiv" data-v="${k}" class="${(v.equiv||'')===k?'on':''}">${t}</button>`).join('')}</div></div>`;
+  h+=`<div class="field"><label for="vm-art">VMM article</label><input id="vm-art" data-pf="vmm.article" data-id="${pid}" placeholder="Article name or code" value="${esc(v.article||'')}"></div>`;
+  h+=`<div class="field"><label for="vm-mrp">VMM MRP (₹)</label><input id="vm-mrp" inputmode="decimal" data-pf="vmm.mrp" data-id="${pid}" placeholder="Our MRP" value="${esc(v.mrp||'')}"></div>`;
+  h+=`<div class="gapl" id="vmm-gap">${esc(gapLine(p))}</div>`;
+  h+=`<div class="blk"><div class="bl">Decision</div><div class="seg">${[['','Undecided'],['pursue','Pursue'],['not','Not pursuing']].map(([k,t])=>`<button data-act="pset" data-id="${pid}" data-path="vmm.decision" data-v="${k}" class="${(v.decision||'')===k?'on':''}">${t}</button>`).join('')}</div></div>`;
+  if(v.decision==='not')h+=`<div class="field"><label for="vm-rsn">Reason</label><input id="vm-rsn" data-pf="vmm.reason" data-id="${pid}" placeholder="Why we’re not taking it up" value="${esc(v.reason||'')}"></div>`;
+  if(v.decision==='pursue'){
+    h+=`<div class="blk"><div class="bl">Where it stands</div><div class="seg">${[['','Planned'],['wip','In development'],['launched','Launched']].map(([k,t])=>`<button data-act="pset" data-id="${pid}" data-path="vmm.stage" data-v="${k}" class="${(v.stage||'')===k?'on':''}">${t}</button>`).join('')}</div></div>`;
+    h+=`<div class="field"><label for="vm-next">Next step</label><input id="vm-next" data-pf="vmm.next" data-id="${pid}" placeholder="e.g. Sampling with vendor" value="${esc(v.next||'')}"></div>`;
+    h+=`<div class="field"><label for="vm-own">Owner</label><select id="vm-own" data-pf="vmm.owner" data-id="${pid}"><option value="">Choose</option>${team().map(t=>`<option ${v.owner===t?'selected':''}>${esc(t)}</option>`).join('')}</select></div>`;
+    if(v.stage!=='launched')h+=`<div class="field"><label for="vm-tgt">Target date</label><input id="vm-tgt" type="date" data-pf="vmm.target" data-id="${pid}" value="${esc(/^\d{4}-\d\d-\d\d$/.test(v.target||'')?v.target:'')}"></div>`;
+  }
+  h+=`</div>`;
+  if(v.decision==='pursue'||v.photos.length||v.equiv==='yes'||v.equiv==='similar'){
+    h+=`<div class="cap">Our product photos</div><div class="group"><div class="photos">${v.photos.map((r,i)=>`<div class="ph">${img(r,'',`data-act="zoom" data-ref="${esc(r)}"`)}<button class="x" data-act="vmm-delph" data-id="${pid}" data-i="${i}" aria-label="Remove photo">×</button></div>`).join('')}<label class="ph">${IC.cam}<span>Add</span><input type="file" accept="image/*" multiple data-act="vmm-file" data-id="${pid}"></label></div></div><p class="foot">The product itself, and how it looks on the shelf in our store.</p>`;
+  }
+  if(v.decision==='pursue'&&v.stage==='launched'){
+    const wk=v.launchDate&&(p.firstSeen||(a[0]||{}).date)?Math.max(0,Math.round(daysBetween(p.firstSeen||a[0].date,v.launchDate)/7)):null;
+    h+=`<div class="cap">After launch</div><div class="group vm">`;
+    h+=`<div class="field"><label for="vm-ld">Launch date</label><input id="vm-ld" type="date" data-pf="vmm.launchDate" data-id="${pid}" value="${esc(v.launchDate||'')}"></div>`;
+    h+=`<div class="field"><label for="vm-st">Sell-through %</label><input id="vm-st" inputmode="decimal" data-pf="vmm.st" data-id="${pid}" placeholder="e.g. 62" value="${esc(v.st||'')}"></div>`;
+    h+=`<div class="field"><label for="vm-un">Units sold</label><input id="vm-un" inputmode="numeric" data-pf="vmm.units" data-id="${pid}" placeholder="Quantity" value="${esc(v.units||'')}"></div>`;
+    h+=`<div class="field"><label for="vm-val">Sales value (₹)</label><input id="vm-val" inputmode="decimal" data-pf="vmm.value" data-id="${pid}" placeholder="Value" value="${esc(v.value||'')}"></div>`;
+    h+=`<div class="field"><label for="vm-asof">Figures as of</label><input id="vm-asof" type="date" data-pf="vmm.asOf" data-id="${pid}" value="${esc(v.asOf||'')}"></div>`;
+    h+=`</div>${wk!=null?`<p class="foot">Launched ${wk} week${wk===1?'':'s'} after it was first spotted at ${esc(storeShort(p.storeId))}.</p>`:''}`;
+  }
+  h+=`</div></div>`;
   // timeline
   h+=`<div class="cap">History · ${a.length} visit${a.length===1?'':'s'}</div><div class="tl">`;
-  for(let i=a.length-1;i>=0;i--){const e=a[i];const pv=i>0?a[i-1]:null;const ch=diff(pv,e);const v=S.visits[e.visitId];
-    const same=pv&&e.observation&&norm(e.observation)===norm(pv.observation);
-    h+=`<div class="tli ${i===a.length-1?'first':''}"><div class="when">${esc(fd(e.date,'dow'))}${v&&v.storeId!==p.storeId?' · '+esc(storeShort(v.storeId)):''}${e.by?` · ${esc(e.by)}`:''}<span style="flex:1"></span><button class="lnk" style="font-size:13px;padding:0" data-act="edit-entry" data-id="${e.id}">Edit</button></div><div class="box">`;
+  for(let i=a.length-1;i>=0;i--){const e=a[i];const pv=i>0?a[i-1]:null;const ch=diff(pv,e);const vis=S.visits[e.visitId];
+    const same=pv&&e.observation&&norm(e.observation)===norm(pv.observation);const stx=sizeText(e);
+    h+=`<div class="tli ${i===a.length-1?'first':''}"><div class="when">${esc(fd(e.date,'dow'))}${vis&&vis.storeId!==p.storeId?' · '+esc(storeShort(vis.storeId)):''}${e.by?` · ${esc(e.by)}`:''}<span style="flex:1"></span><button class="lnk" style="font-size:13px;padding:0" data-act="edit-entry" data-id="${e.id}">Edit</button></div><div class="box">`;
     if(ch.length&&ch.some(c=>c.k!=='obs'))h+=`<div class="chg">${ch.filter(c=>c.k!=='obs').map(c=>`<span class="pill ${c.k==='status'?(c.tone||''):c.k==='price'?(c.dir==='up'?'bad':c.dir==='down'?'good':'tint'):c.k==='new'?'tint':''}">${c.k==='price'?'Price ':c.k==='fixture'?'Moved: ':''}${esc(c.t)}</span>`).join('')}</div>`;
     h+=e.observation?`<div class="obs ${same?'same':''}">${same?'No change: ':''}${esc(e.observation)}</div>`:`<div class="obs same">No observation noted</div>`;
     if(e.photos&&e.photos.length)h+=`<div class="imgs">${e.photos.map(r=>img(r,'',`data-act="zoom" data-ref="${esc(r)}"`)).join('')}</div>`;
-    h+=`<div class="foot" style="margin:0">${esc(fmtPrice(e.price))} · ${esc(e.fixture||'—')}${e.purpose?' · '+esc(e.purpose):''}</div></div></div>`;
+    h+=`<div class="foot" style="margin:0">${stx?esc(stx):'Price needed'} · ${esc(e.fixture||'—')}${e.purpose?' · '+esc(e.purpose):''}</div></div></div>`;
   }
   if(!a.length)h+=`<div class="note">No visits logged yet.</div>`;
   h+=`</div></div>`;
@@ -345,53 +397,19 @@ function viewVisit(vid){
 }
 function visitRow(p,v,isDone){
   const e=entryFor(p.id,v.id);const l=isDone?prevOf(p.id,e):latest(p.id);
-  const meta=isDone?(changeLine(diff(l,e))||'No change')+' · '+(e.by||''):(l?('Last: '+(l.observation||fmtPrice(l.price))):'New');
+  const meta=isDone?(changeLine(diff(l,e))||'No change')+' · '+(e.by||''):(l?('Last: '+(l.observation||priceText(l)||'no notes')):'New');
   return `<div class="row th" style="padding-right:10px"><button data-act="product" data-id="${p.id}" class="thumb" aria-label="Open ${esc(p.name)}">${img(cover(p))||IC.img}</button><button class="grow" style="text-align:left;min-width:0" data-act="update" data-id="${p.id}" data-visit="${v.id}"><div class="ttl">${esc(p.name)}</div><div class="meta">${esc(p.buyer||'')} · ${esc(meta)}</div></button>${isDone?`<button class="done-dot on" data-act="update" data-id="${p.id}" data-visit="${v.id}" aria-label="Edit update">${IC.check}</button>`:`<button class="pill tint" style="padding:6px 10px" data-act="nochange" data-id="${p.id}" data-visit="${v.id}">Same</button>`}</div>`;
 }
+
+/* ---------- Insights: Review, Weekly, Pipeline ---------- */
 
 /* ---------- Insights ---------- */
 function viewInsights(){
   let h=topbar('Insights')+`<h1 class="lt">Insights</h1>`;
   if(!S.ready)return h+notReady();
-  const stores=Object.values(S.stores).sort((a,b)=>a.name.localeCompare(b.name));
-  const sf=S.ins.store;
-  h+=`<div class="chips">${[['all','All stores'],...stores.map(s=>[s.id,s.name+(s.location?' '+s.location:'')])].map(([k,l])=>`<button class="chip ${sf===k?'on':''}" data-act="ins-store" data-v="${k}">${esc(l)}</button>`).join('')}</div>`;
-  const ps=activeProducts().filter(p=>sf==='all'||p.storeId===sf);
-  const evs=ps.map(p=>({p,ev:bsEval(p),l:latest(p.id)}));
-  const visits=Object.values(S.visits).filter(v=>sf==='all'||v.storeId===sf).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
-  const allE=Object.values(S.entries).filter(e=>S.products[e.productId]&&(sf==='all'||S.products[e.productId].storeId===sf));
-  h+=`<div class="tiles" style="margin-top:14px">
-   <div class="tile"><span class="k">Store visits</span><span class="v">${visits.length}</span></div>
-   <div class="tile"><span class="k">Updates logged</span><span class="v">${allE.length}</span></div>
-   <div class="tile"><span class="k">Price changes</span><span class="v">${countChanges(allE,'price')}</span></div>
-   <div class="tile"><span class="k">Display moves</span><span class="v">${countChanges(allE,'fixture')}</span></div></div>`;
-  // pipeline
-  const stages=[['watching','Watching','var(--label3)'],['candidate','Candidate','var(--tint)'],['likely','Likely best seller','var(--good)'],['best','Confirmed best seller','var(--gold)'],['dropped','Dropped','var(--bad)']];
-  const mx=Math.max(1,...stages.map(s=>evs.filter(x=>x.ev.stage===s[0]).length));
-  h+=`<div class="cols"><div><div class="cap">Best-seller pipeline</div><div class="group">${stages.map(([k,l,c])=>{const n=evs.filter(x=>x.ev.stage===k).length;return `<button class="bar tap" style="width:100%" data-act="goprod" data-status="${k==='likely'?'best':k}"><span class="lb">${l}</span><span class="tr"><i style="width:${n/mx*100}%;background:${c}"></i></span><span class="n">${n}</span></button>`}).join('')}</div><p class="foot">Based on the rules in your Notes sheet: 3–4 weeks on floor and no liquidation are must-haves; the four signals add confidence.</p></div>`;
-  // by category
-  const byCat={};ps.forEach(p=>{const k=p.category||'Uncategorised';byCat[k]=(byCat[k]||0)+1});
-  const cats=Object.entries(byCat).sort((a,b)=>b[1]-a[1]).slice(0,10);const cm=Math.max(1,...cats.map(c=>c[1]));
-  h+=`<div><div class="cap">Products by category</div><div class="group">${cats.map(([k,n])=>`<div class="bar"><span class="lb">${esc(k.replace(/^HH_/,''))}</span><span class="tr"><i style="width:${n/cm*100}%"></i></span><span class="n">${n}</span></div>`).join('')||'<div class="row">No products</div>'}</div></div></div>`;
-  // price movements
-  const pm=[];for(const {p} of evs){const a=ents(p.id);for(let i=1;i<a.length;i++){const d=diff(a[i-1],a[i]).find(c=>c.k==='price');if(d)pm.push({p,e:a[i],d,from:a[i-1].price})}}
-  pm.sort((a,b)=>b.e.date.localeCompare(a.e.date));
-  h+=`<div class="cap">Price movements</div>`;
-  h+=pm.length?`<div class="tbl"><table><thead><tr><th>Product</th><th>Store</th><th>From</th><th>To</th><th>Seen</th></tr></thead><tbody>${pm.slice(0,25).map(x=>`<tr><td><button class="lnk" style="padding:0;font-size:14px;text-align:left" data-act="product" data-id="${x.p.id}">${esc(x.p.name)}</button></td><td>${esc(storeShort(x.p.storeId))}</td><td class="n">${esc(fmtPrice(x.from))}</td><td class="n ${x.d.dir}">${esc(fmtPrice(x.e.price))}</td><td class="n">${esc(fd(x.e.date))}</td></tr>`).join('')}</tbody></table></div>`:`<div class="note">No price changes recorded yet. They’ll show here when a price differs from the visit before.</div>`;
-  // status signals
-  const sig=evs.filter(x=>x.l&&['selling-fast','sold-out','restocked','removed','on-sale'].includes(x.l.status));
-  h+=`<div class="cols"><div><div class="cap">Latest stock signals</div>`;
-  h+=sig.length?`<div class="group">${sig.slice(0,12).map(x=>prodRow(x.p,STATUS_BY[x.l.status].label+' · '+rel(x.l.date))).join('')}</div>`:`<div class="note">No selling-fast, sold-out or removed signals at the latest visits.</div>`;
-  h+=`</div><div>`;
-  // team activity
-  const byB={};allE.forEach(e=>{const b=(S.products[e.productId]||{}).buyer||'—';byB[b]=(byB[b]||0)+1});
-  const bb=Object.entries(byB).sort((a,b)=>b[1]-a[1]);const bm=Math.max(1,...bb.map(x=>x[1]));
-  h+=`<div class="cap">Updates by buyer</div><div class="group">${bb.map(([k,n])=>`<div class="bar"><span class="lb" style="display:flex;align-items:center;gap:8px"><span class="av" style="width:22px;height:22px;font-size:9px;background:${avColor(k)}">${esc(initials(k))}</span>${esc(k)}</span><span class="tr"><i style="width:${n/bm*100}%;background:${avColor(k)}"></i></span><span class="n">${n}</span></div>`).join('')||'<div class="row">No updates</div>'}</div>`;
-  const byP={};ps.forEach(p=>{const k=p.purpose||'Not set';byP[k]=(byP[k]||0)+1});
-  h+=`<div class="cap">Why we’re tracking</div><div class="group">${Object.entries(byP).sort((a,b)=>b[1]-a[1]).map(([k,n])=>`<div class="row"><span class="grow">${esc(k)}</span><span class="val">${n}</span></div>`).join('')}</div>`;
-  h+=`</div></div>`;
-  h+=`<div class="cap">Share with the team</div><div class="group"><button class="row" data-act="export"><span class="thumb" style="width:36px;height:36px;color:var(--good)">${IC.dl}</span><span class="grow"><div class="ttl">Download Excel report</div><div class="meta">Latest view, full history, visit-by-visit changes, price moves</div></span>${IC.chev}</button><button class="row" data-act="import"><span class="thumb" style="width:36px;height:36px;color:var(--tint)">${IC.ul}</span><span class="grow"><div class="ttl">Import from Excel</div><div class="meta">Your old benchmarking sheet or the Shelfwatch template</div></span>${IC.chev}</button></div>`;
-  return h;
+  const tab=S.ins.tab||'review';
+  h+=`<div class="seg" style="margin:4px 0 14px">${[['review','Review'],['weekly','Weekly report'],['pipeline','Pipeline']].map(([k,l])=>`<button data-act="ins-tab" data-k="${k}" class="${tab===k?'on':''}">${l}</button>`).join('')}</div>`;
+  return h+(tab==='weekly'?insWeekly():tab==='pipeline'?insPipeline():insReview());
 }
 function countChanges(es,k){let n=0;const by={};es.forEach(e=>(by[e.productId]=by[e.productId]||[]).push(e));for(const a of Object.values(by)){a.sort((x,y)=>(x.date||'').localeCompare(y.date||''));for(let i=1;i<a.length;i++)if(diff(a[i-1],a[i]).some(c=>c.k===k))n++}return n}
 
@@ -401,21 +419,30 @@ function syncDetail(){const s=PLATFORM.status;
 function viewSettings(){
   let h=topbar('Settings')+`<h1 class="lt">Settings</h1>`;
   if(!S.ready)return h+notReady();
-  const st=PLATFORM.status;
+  const st=PLATFORM.status;const R=rules();const P=plan();const mon=weekStart(today());const ri=roundIndex(mon);
   h+=`<div class="cap">You</div><div class="group"><button class="row" data-act="who"><span class="av" style="background:${avColor(S.me||'?')}">${esc(initials(S.me||'?'))}</span><span class="grow"><div class="ttl">${esc(S.me||'Choose your name')}</div><div class="meta">${esc(st.email||'')}</div></span>${IC.chev}</button><button class="row" data-act="signout" style="color:var(--bad)"><span class="grow">Sign out of this device</span></button></div><div id="signout-confirm"></div>`;
   h+=`<div class="cap">Sync</div><div class="group" id="syncrow">${syncDetail()}</div><p class="foot">Everything you log is saved on this device first, so the app works without signal. It uploads on its own when you’re back online.</p>`;
+  const step=(k,val,lo,hi,label,sub)=>`<div class="row"><span class="grow"><div class="ttl">${label}</div><div class="meta" style="white-space:normal">${sub}</div></span><span class="stepper"><button data-act="rule" data-k="${k}" data-d="-1" ${val<=lo?'disabled':''} aria-label="Less">−</button><b>${val}</b><button data-act="rule" data-k="${k}" data-d="1" ${val>=hi?'disabled':''} aria-label="More">+</button></span></div>`;
+  h+=`<div class="cap">Best-seller rules</div><div class="group">${step('minWeeks',R.minWeeks,1,12,'Weeks on floor','Must-have. Counted from the first visit it was seen.')}<button class="check ${R.noDiscount?'on':''}" data-act="rule-toggle"><span class="bx">${R.noDiscount?IC.check:''}</span><span class="grow"><div>No liquidation or forced discount</div><div class="why">Must-have. A product marked “On sale / discount” at any visit is ruled out.</div></span></button>${step('needSignals',R.needSignals,0,4,'Signals needed','Out of: more depth or width, multiple displays, best seller tag, available across stores.')}</div><p class="foot">Candidate = the must-haves are met. Best seller = must-haves plus the signals. Every product is re-labelled as soon as you change a rule.</p>`;
+  const stores=Object.values(S.stores).sort((a,b)=>a.name.localeCompare(b.name));
+  h+=`<div class="cap">Visit plan</div>`;
+  P.rounds.forEach((r,i)=>{h+=`<div class="group" style="margin-bottom:10px"><div class="row"><span class="grow"><div class="ttl">${esc(r.name)} round</div><div class="meta">${i===ri?'This week':'Next week'}${P.rounds.length>2?' (round '+(i+1)+')':''}</div></span>${i===ri?'<span class="pill good">This week</span>':`<button class="lnk" style="font-size:15px" data-act="plan-this" data-i="${i}">Make this week</button>`}</div><div class="optgrid">${stores.map(s=>`<button class="opt ${r.stores.includes(s.id)?'on':''}" data-act="plan-store" data-i="${i}" data-v="${s.id}">${esc(s.name+(s.location?' · '+s.location:''))}</button>`).join('')}</div></div>`});
+  h+=`<p class="foot">Visits are on ${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][P.weekday||4]}s and the two rounds alternate week by week. The Weekly report checks each week against this plan.</p>`;
+  h+=listEditor('reasons','Absence reasons',reasons(),'Shown when marking someone absent in the Weekly report');
   h+=`<div class="cap">Team access</div><div class="group">${(st.members||[]).map(m=>`<div class="row"><span class="av" style="background:${avColor(m.name)}">${esc(initials(m.name))}</span><span class="grow"><div class="ttl">${esc(m.name)}</div><div class="meta">${esc(m.email)}</div></span>${m.email.toLowerCase()===String(st.email).toLowerCase()?'<span class="val">You</span>':`<button class="lnk" style="color:var(--bad);font-size:15px" data-act="member-del" data-v="${esc(m.email)}">Remove</button>`}</div>`).join('')}
     <div class="field"><input id="mem-name" placeholder="Name" style="text-align:left;max-width:34%"><input id="mem-email" type="email" placeholder="work email" style="text-align:left" autocomplete="off"><button class="lnk" data-act="member-add">Add</button></div></div>
     <p class="foot">Only these emails can sign in and see the data. After adding someone, send them the app link.</p>
     <div class="group" style="margin-top:10px"><button class="row" data-act="copy-invite"><span class="grow"><div class="ttl" style="color:var(--tint)">Copy app link for the team</div><div class="meta">They open it and create a password with the email you added</div></span></button></div>`;
-  h+=`<div class="cap">Stores</div><div class="group">${Object.values(S.stores).sort((a,b)=>a.name.localeCompare(b.name)).map(s=>{const n=activeProducts().filter(p=>p.storeId===s.id).length;return `<button class="row" data-act="edit-store" data-id="${s.id}"><span class="grow"><div class="ttl">${esc(s.name)}</div><div class="meta">${esc(s.location||'Location not set')} · ${n} product${n===1?'':'s'}</div></span>${IC.chev}</button>`}).join('')}<button class="row" data-act="edit-store" style="color:var(--tint)">${IC.plus.replace('<svg','<svg style="width:20px;height:20px"')} Add a store</button></div>`;
-  h+=listEditor('team','Buyer names',team(),'Names that show in buyer and attendee pickers');
+  h+=`<div class="cap">Stores</div><div class="group">${stores.map(s=>{const n=activeProducts().filter(p=>p.storeId===s.id).length;return `<button class="row" data-act="edit-store" data-id="${s.id}"><span class="grow"><div class="ttl">${esc(s.name)}</div><div class="meta">${esc(s.location||'Location not set')} · ${n} product${n===1?'':'s'}</div></span>${IC.chev}</button>`}).join('')}<button class="row" data-act="edit-store" style="color:var(--tint)">${IC.plus.replace('<svg','<svg style="width:20px;height:20px"')} Add a store</button></div>`;
+  h+=listEditor('team','Buyer names',team(),'Names that show in buyer, attendee and attendance lists');
   h+=listEditor('fixtures','Fixtures',fixtures(),'Quick picks when logging where a product sits');
   h+=listEditor('purposes','Why we track',purposes(),'Quick picks for the reason a product is on the list');
   h+=`<div class="cap">Data</div><div class="group"><button class="row" data-act="export"><span class="grow">Download Excel report</span>${IC.chev}</button><button class="row" data-act="import"><span class="grow">Import from Excel</span>${IC.chev}</button><button class="row" data-act="backup"><span class="grow"><div class="ttl">Download full backup</div><div class="meta">All products, visits and photos in one .zip</div></span>${IC.chev}</button><button class="row" data-act="restore"><span class="grow"><div class="ttl">Restore from backup</div><div class="meta">Load a Shelfwatch .zip into the team’s data</div></span>${IC.chev}</button><button class="row" data-act="goprod" data-status="archived"><span class="grow">Archived products</span><span class="val">${Object.values(S.products).filter(p=>p.archived).length}</span>${IC.chev}</button></div>`;
-  h+=`<p class="foot">Shelfwatch version 1.1 · data is shared live with everyone on the team list.</p>`;
+  h+=`<p class="foot">Shelfwatch version ${APP_VERSION} · data is shared live with everyone on the team list.</p>`;
   return h;
 }
+
+/* ---------- Update sheet ---------- */
 function listEditor(k,t,arr,foot){return `<div class="cap">${t}</div><div class="group"><div class="optgrid">${arr.map(x=>`<span class="opt" style="display:inline-flex;gap:6px;align-items:center">${esc(x)}<button data-act="list-del" data-k="${k}" data-v="${esc(x)}" aria-label="Remove ${esc(x)}" style="color:var(--label2)">×</button></span>`).join('')}</div><div class="field"><input id="add-${k}" placeholder="Add ${t.toLowerCase()==='team'?'a name':'an option'}" style="text-align:left"><button class="lnk" data-act="list-add" data-k="${k}">Add</button></div></div><p class="foot">${foot}</p>`}
 
 /* ---------- Sheets ---------- */
@@ -442,7 +469,7 @@ function openUpdate(pid,vid,entryId){
   const base=e||{};
   sheetState={kind:'update',pid,vid:e?e.visitId:vid,entryId:e?e.id:null,
     status:base.status||(prev&&prev.status!=='removed'?(prev.status==='sold-out'?'on-floor':prev.status):'on-floor'),
-    price:base.price!=null?base.price:(prev?prev.price:''),fixture:base.fixture!=null?base.fixture:(prev?prev.fixture:''),
+    pr:priceEditorInit(e?pricing(e):pricing(prev)),fixture:base.fixture!=null?base.fixture:(prev?prev.fixture:''),
     purpose:base.purpose!=null?base.purpose:(prev?prev.purpose:p.purpose||''),observation:base.observation||'',photos:(base.photos||[]).slice(),
     date:base.date||(vid&&S.visits[vid]?S.visits[vid].date:today()),busy:0};
   const st=sheetState;
@@ -450,8 +477,8 @@ function openUpdate(pid,vid,entryId){
   h+=`<div class="who" style="margin:2px 4px 12px">${esc(storeName(p.storeId))} · ${esc(fd(st.date,'dow'))}${prev?` · last checked ${esc(rel(prev.date))}`:''}</div>`;
   h+=`<div class="group"><div class="photos" id="u-photos"></div></div>`;
   h+=`<div class="cap">How is it doing?</div><div class="group"><div class="optgrid" id="u-status">${STATUS.map(s=>`<button class="opt ${s.tone} ${st.status===s.id?'on':''}" data-act="u-status" data-v="${s.id}">${esc(s.label)}</button>`).join('')}</div></div>`;
+  h+=`<div class="cap">Size and MRP</div><div class="group" id="pe-box">${priceEditorHTML()}</div>`;
   h+=`<div class="cap">Details</div><div class="group">`;
-  h+=`<div class="field"><label for="u-price">Price (₹)</label><input id="u-price" inputmode="text" placeholder="e.g. 399 or 99/249" value="${esc(st.price)}"></div>`;
   h+=`<div class="field"><label for="u-fixture">Fixture</label><input id="u-fixture" list="dl-fix" placeholder="Where it sits" value="${esc(st.fixture)}"></div>`;
   h+=`<div class="field"><label for="u-purpose">Why track</label><input id="u-purpose" list="dl-pur" placeholder="Reason" value="${esc(st.purpose)}"></div>`;
   h+=`</div><datalist id="dl-fix">${fixtures().map(x=>`<option value="${esc(x)}">`).join('')}</datalist><datalist id="dl-pur">${purposes().map(x=>`<option value="${esc(x)}">`).join('')}</datalist>`;
@@ -466,10 +493,11 @@ function renderUPhotos(){
 }
 async function saveUpdate(quick){
   const st=sheetState;if(!st||st.busy)return;
-  if(!quick){st.price=$('#u-price').value.trim();st.fixture=$('#u-fixture').value.trim();st.purpose=$('#u-purpose').value.trim();st.observation=$('#u-obs').value.trim()}
+  const pr=priceEditorResult();
+  st.fixture=$('#u-fixture').value.trim();st.purpose=$('#u-purpose').value.trim();st.observation=$('#u-obs').value.trim();
   const id=st.entryId||(st.vid?('e_'+st.pid+'_'+st.vid):uid('e_'));
   const old=S.entries[id]||{};
-  const data={productId:st.pid,visitId:st.vid||'',date:st.date,status:st.status,price:st.price,fixture:st.fixture,purpose:st.purpose,observation:st.observation,photos:st.photos,by:old.by||S.me||'',at:old.at||Date.now(),editedAt:Date.now()};
+  const data={productId:st.pid,visitId:st.vid||'',date:st.date,status:st.status,pricing:pr,price:legacyPrice(pr),fixture:st.fixture,purpose:st.purpose,observation:st.observation,photos:st.photos,by:old.by||S.me||'',at:old.at||Date.now(),editedAt:Date.now()};
   const ok=await w(async()=>{await db.doc('entries/'+id).set(data);
     const p=S.products[st.pid];const upd={};if(st.purpose&&st.purpose!==p.purpose)upd.purpose=st.purpose;
     if(Object.keys(upd).length)await db.doc('products/'+st.pid).update(upd)},'Saved');
@@ -477,8 +505,8 @@ async function saveUpdate(quick){
 }
 async function quickSame(pid,vid){
   const l=latest(pid);const v=S.visits[vid];if(!v)return;
-  const id='e_'+pid+'_'+vid;
-  const data={productId:pid,visitId:vid,date:v.date,status:l&&l.status&&l.status!=='sold-out'?l.status:'on-floor',price:l?l.price:'',fixture:l?l.fixture:'',purpose:l?l.purpose:'',observation:l?l.observation:'',photos:[],by:S.me||'',at:Date.now()};
+  const id='e_'+pid+'_'+vid;const pr=pricing(l);
+  const data={productId:pid,visitId:vid,date:v.date,status:l&&l.status&&l.status!=='sold-out'?l.status:'on-floor',pricing:pr,price:legacyPrice(pr),fixture:l?l.fixture:'',purpose:l?l.purpose:'',observation:l?l.observation:'',photos:[],by:S.me||'',at:Date.now()};
   if(await w(()=>db.doc('entries/'+id).set(data),'Logged as no change')){S.entries[id]=Object.assign({id},data);render()}
 }
 
@@ -487,7 +515,7 @@ function openProductForm(pid,vid){
   const p=pid?S.products[pid]:null;const v=vid?S.visits[vid]:null;
   const stores=Object.values(S.stores).sort((a,b)=>a.name.localeCompare(b.name));
   const cats=[...new Set(Object.values(S.products).map(x=>x.category).filter(Boolean))].sort();
-  sheetState={kind:'product',pid,vid,photos:[],status:'on-floor',busy:0};
+  sheetState={kind:'product',pid,vid,photos:[],status:'on-floor',busy:0,pr:priceEditorInit({mode:'none',variants:[]})};
   let h=sheetHead(p?'Edit product':'New product',p?'Save':'Add','save-product')+`<div class="sb">`;
   if(!p)h+=`<div class="group"><div class="photos" id="u-photos"></div></div>`;
   h+=`<div class="cap">Product</div><div class="group">`;
@@ -499,10 +527,9 @@ function openProductForm(pid,vid){
   h+=`<div class="field"><label for="np-pur">Why track</label><input id="np-pur" list="dl-pur" placeholder="Reason" value="${esc(p?p.purpose:'')}"></div>`;
   h+=`</div><datalist id="dl-cat">${cats.map(x=>`<option value="${esc(x)}">`).join('')}</datalist><datalist id="dl-pur">${purposes().map(x=>`<option value="${esc(x)}">`).join('')}</datalist><datalist id="dl-fix">${fixtures().map(x=>`<option value="${esc(x)}">`).join('')}</datalist>`;
   if(!p){
-    h+=`<div class="cap">First observation${v?' · '+esc(fd(v.date)):''}</div><div class="group">`;
-    h+=`<div class="field"><label for="np-price">Price (₹)</label><input id="np-price" placeholder="e.g. 399"></div>`;
-    h+=`<div class="field"><label for="np-fix">Fixture</label><input id="np-fix" list="dl-fix" placeholder="Where it sits"></div>`;
-    h+=`</div><div class="group" style="margin-top:10px"><div class="optgrid" id="u-status">${STATUS.filter(s=>s.id!=='removed').map(s=>`<button class="opt ${s.tone} ${s.id==='on-floor'?'on':''}" data-act="u-status" data-v="${s.id}">${esc(s.label)}</button>`).join('')}</div></div>`;
+    h+=`<div class="cap">Size and MRP${v?' · '+esc(fd(v.date)):''}</div><div class="group" id="pe-box">${priceEditorHTML()}</div>`;
+    h+=`<div class="cap">First observation</div><div class="group"><div class="field"><label for="np-fix">Fixture</label><input id="np-fix" list="dl-fix" placeholder="Where it sits"></div></div>`;
+    h+=`<div class="group" style="margin-top:10px"><div class="optgrid" id="u-status">${STATUS.filter(s=>s.id!=='removed').map(s=>`<button class="opt ${s.tone} ${s.id==='on-floor'?'on':''}" data-act="u-status" data-v="${s.id}">${esc(s.label)}</button>`).join('')}</div></div>`;
     h+=`<div class="group" style="margin-top:10px"><textarea id="np-obs" placeholder="What did you notice?"></textarea></div>`;
   }else{
     h+=`<div style="margin-top:22px;display:grid;gap:10px"><button class="btn plain" data-act="archive" data-id="${p.id}">${p.archived?'Start tracking again':'Stop tracking (archive)'}</button><button class="btn danger" data-act="del-product" data-id="${p.id}">Delete product and history</button><div id="del-confirm"></div></div>`;
@@ -515,14 +542,16 @@ async function saveProduct(){
   const name=$('#np-name').value.trim();if(!name){toast('Give the product a name');$('#np-name').focus();return}
   const base={name,category:$('#np-cat').value.trim(),brand:$('#np-brand').value.trim(),storeId:$('#np-store').value,buyer:$('#np-buyer').value,purpose:$('#np-pur').value.trim()};
   if(st.pid){if(await w(()=>db.doc('products/'+st.pid).update(base),'Saved')){Object.assign(S.products[st.pid],base);closeSheet();render()}return}
-  const pid=uid('p_');let vid=st.vid;
+  const pid=uid('p_');let vid=st.vid;const pr=priceEditorResult();
   const date=vid&&S.visits[vid]?S.visits[vid].date:today();
   const prod=Object.assign(base,{firstSeen:date,createdAt:Date.now(),createdBy:S.me||'',bs:{}});
-  const entry={productId:pid,visitId:vid||'',date,status:st.status,price:$('#np-price').value.trim(),fixture:$('#np-fix').value.trim(),purpose:base.purpose,observation:$('#np-obs').value.trim(),photos:st.photos,by:S.me||'',at:Date.now()};
+  const entry={productId:pid,visitId:vid||'',date,status:st.status,pricing:pr,price:legacyPrice(pr),fixture:$('#np-fix').value.trim(),purpose:base.purpose,observation:$('#np-obs').value.trim(),photos:st.photos,by:S.me||'',at:Date.now()};
   const eid=vid?('e_'+pid+'_'+vid):uid('e_');
   const ok=await w(async()=>{await db.doc('products/'+pid).set(prod);await db.doc('entries/'+eid).set(entry)},'Added '+name);
   if(ok){S.products[pid]=Object.assign({id:pid},prod);S.entries[eid]=Object.assign({id:eid},entry);closeSheet();render()}
 }
+
+/* ---------- Excel ---------- */
 
 /* Store form */
 function openStoreForm(sid){
@@ -635,22 +664,23 @@ async function doExport(){
   if(!(await loadXLSX())){toast('Excel tools didn’t load. Reload the app and try again.');return}
   const wb=XLSX.utils.book_new();
   const prods=Object.values(S.products).sort((a,b)=>storeName(a.storeId).localeCompare(storeName(b.storeId))||(a.buyer||'').localeCompare(b.buyer||'')||a.name.localeCompare(b.name));
-  const latestRows=prods.map(p=>{const a=ents(p.id);const l=a[a.length-1]||{};const pv=a.length>1?a[a.length-2]:null;const ev=bsEval(p);return {
+  const latestRows=prods.map(p=>{const a=ents(p.id);const l=a[a.length-1]||{};const pv=a.length>1?a[a.length-2]:null;const ev=bsEval(p);const v=vmmOf(p);const g=vmmGap(p);const b=priceBounds(l);return {
     'Store':storeName(p.storeId),'Buyer':p.buyer,'Category':p.category,'Product':p.name,'Brand':p.brand,'Why track':p.purpose,
-    'Latest price':l.price||'','Previous price':pv?pv.price:'','Fixture':l.fixture||'','Status':(STATUS_BY[l.status]||{}).label||'',
+    'Sizes and MRP':sizeText(l),'Lowest MRP':b?b[0]:'','Highest MRP':b?b[1]:'','Fixture':l.fixture||'','Status':(STATUS_BY[l.status]||{}).label||'',
     'Latest observation':l.observation||'','What changed':pv?changeLine(diff(pv,l)):'First logged','First seen':p.firstSeen||'','Last checked':l.date||'',
-    'Weeks on floor':ev.w,'Visits logged':a.length,'Best-seller stage':ev.label,'Signals (of 4)':ev.opt,
-    'Action':(p.action||{}).text||'','Action owner':(p.action||{}).owner||'','Due':(p.action||{}).due||'','Action done':(p.action||{}).done?'Yes':'','Archived':p.archived?'Yes':''}});
-  const ws1=XLSX.utils.json_to_sheet(latestRows);ws1['!cols']=[22,10,22,34,14,20,12,12,18,14,50,34,11,11,8,8,18,8,30,12,11,8,8].map(w=>({wch:w}));XLSX.utils.book_append_sheet(wb,ws1,'Latest view');
-  const hist=[];for(const p of prods){const a=ents(p.id);a.forEach((e,i)=>{hist.push({'Date':e.date,'Store':storeName(p.storeId),'Buyer':p.buyer,'Category':p.category,'Product':p.name,'Price':e.price,'Fixture':e.fixture,'Status':(STATUS_BY[e.status]||{}).label||'','Observation':e.observation,'Why track':e.purpose,'What changed':changeLine(diff(i?a[i-1]:null,e))||'No change','Photos':(e.photos||[]).length,'Logged by':e.by||''})})}
+    'Weeks on floor':ev.w,'Visits logged':a.length,'Best-seller check':ev.label,'Signals (of 4)':ev.opt,'Stage':PIPE_LONG[pipe(p)]||'',
+    'VMM has it':({yes:'Yes',similar:'Similar',no:'No'})[v.equiv]||'','VMM article':v.article||'','VMM MRP':priceNum(v.mrp)==null?'':priceNum(v.mrp),'Gap vs competitor %':g?g.pct:'',
+    'Decision':({pursue:'Pursue',not:'Not pursuing'})[v.decision]||'','Reason':v.reason||'','Next step':v.next||'','Owner':v.owner||'','Target date':v.target||'',
+    'Launch date':v.launchDate||'','Sell-through %':v.st||'','Units sold':v.units||'','Sales value':v.value||'','Figures as of':v.asOf||'','Archived':p.archived?'Yes':''}});
+  const ws1=XLSX.utils.json_to_sheet(latestRows);ws1['!cols']=[22,10,22,34,14,20,30,10,10,18,14,50,34,11,11,8,8,16,8,26,10,22,10,10,12,24,28,10,11,11,10,10,12,11,8].map(w=>({wch:w}));XLSX.utils.book_append_sheet(wb,ws1,'Latest view');
+  const hist=[];for(const p of prods){const a=ents(p.id);a.forEach((e,i)=>{hist.push({'Date':e.date,'Week of':weekStart(e.date),'Store':storeName(p.storeId),'Buyer':p.buyer,'Category':p.category,'Product':p.name,'Sizes and MRP':sizeText(e),'Fixture':e.fixture,'Status':(STATUS_BY[e.status]||{}).label||'','Observation':e.observation,'Why track':e.purpose,'What changed':changeLine(diff(i?a[i-1]:null,e))||'No change','Photos':(e.photos||[]).length,'Logged by':e.by||''})})}
   hist.sort((a,b)=>b.Date.localeCompare(a.Date)||a.Product.localeCompare(b.Product));
-  const ws2=XLSX.utils.json_to_sheet(hist);ws2['!cols']=[11,22,10,22,34,12,18,14,50,20,34,7,10].map(w=>({wch:w}));XLSX.utils.book_append_sheet(wb,ws2,'Full history');
-  const vs=Object.values(S.visits).sort((a,b)=>b.date.localeCompare(a.date)).map(v=>{const ch=changesForVisit(v.id);return {'Date':v.date,'Store':storeName(v.storeId),'Attendees':(v.attendees||[]).join(', '),'Products checked':ch.length,'Price changes':ch.filter(c=>c.ch.some(x=>x.k==='price')).length,'Display moves':ch.filter(c=>c.ch.some(x=>x.k==='fixture')).length,'New products':ch.filter(c=>c.ch.some(x=>x.k==='new')).length,'Removed':ch.filter(c=>c.e.status==='removed').length}});
-  const ws3=XLSX.utils.json_to_sheet(vs);ws3['!cols']=[11,26,40,10,10,10,10,10].map(w=>({wch:w}));XLSX.utils.book_append_sheet(wb,ws3,'Visits');
+  const ws2=XLSX.utils.json_to_sheet(hist);ws2['!cols']=[11,11,22,10,22,34,30,18,14,50,20,34,7,10].map(w=>({wch:w}));XLSX.utils.book_append_sheet(wb,ws2,'Full history');
+  const mons=[...new Set(Object.values(S.entries).map(e=>weekStart(e.date)).concat(Object.values(S.visits).map(v=>weekStart(v.date))))].sort().reverse();
+  const wk=mons.map(m=>{const wi=weekInfo(m);return {'Week of':m,'Round':wi.round.name||'','Stores planned':wi.planned.length,'Stores covered':wi.covered,'Stores visited':wi.planned.concat(wi.extra).filter(s=>s.visited).map(s=>storeName(s.sid)).join(', '),'Present':wi.roster.filter(r=>r.status==='Present').map(r=>r.name).join(', '),'Absent':wi.roster.filter(r=>r.status&&r.status!=='Present').map(r=>r.name+' ('+r.status+')').join(', '),'Updates logged':wi.entries.length,'Note':wi.note}});
+  const ws3=XLSX.utils.json_to_sheet(wk);ws3['!cols']=[11,14,8,8,44,40,40,8,40].map(w=>({wch:w}));XLSX.utils.book_append_sheet(wb,ws3,'Week by week');
   const out=XLSX.write(wb,{bookType:'xlsx',type:'array'});
-  const fname='Shelfwatch_'+today()+'.xlsx';
-  if(!downloads){toast('Downloads aren’t available in this view');return}
-  try{await downloads.save({filename:fname,data:new Blob([out])});}catch(e){if(e&&e.code!=='declined')toast('Couldn’t save the file here')}
+  try{await downloads.save({filename:'Shelfwatch_'+today()+'.xlsx',data:new Blob([out])})}catch(e){toast('Couldn’t save the file here')}
 }
 async function doTemplate(){
   if(!(await loadXLSX()))return;
@@ -714,8 +744,8 @@ document.addEventListener('click',async ev=>{
     case 'vmine':S.visitMine=b.dataset.k==='true';ls.set('visitMine',S.visitMine);render();break;
     case 'edit-store':openStoreForm(id);break;
     case 'save-store':saveStore();break;
-    case 'list-add':{const k=b.dataset.k;const inp=$('#add-'+k);const v=inp.value.trim();if(!v)break;const arr=(k==='team'?team():k==='fixtures'?fixtures():purposes()).slice();if(!arr.includes(v))arr.push(v);if(await w(()=>db.doc('config/settings').set(Object.assign({},S.cfg,{[k]:arr})),'Added')){S.cfg[k]=arr;render()}break}
-    case 'list-del':{const k=b.dataset.k;const arr=(k==='team'?team():k==='fixtures'?fixtures():purposes()).filter(x=>x!==b.dataset.v);if(await w(()=>db.doc('config/settings').set(Object.assign({},S.cfg,{[k]:arr})))){S.cfg[k]=arr;render()}break}
+    case 'list-add':{const k=b.dataset.k;const inp=$('#add-'+k);const v=inp.value.trim();if(!v)break;const arr=listOf(k).slice();if(!arr.includes(v))arr.push(v);if(await w(()=>db.doc('config/settings').set(Object.assign({},S.cfg,{[k]:arr})),'Added')){S.cfg[k]=arr;render()}break}
+    case 'list-del':{const k=b.dataset.k;const arr=listOf(k).filter(x=>x!==b.dataset.v);if(await w(()=>db.doc('config/settings').set(Object.assign({},S.cfg,{[k]:arr})))){S.cfg[k]=arr;render()}break}
     case 'export':doExport();break;
     case 'template':doTemplate();break;
     case 'import':openImport();break;
@@ -757,23 +787,307 @@ document.addEventListener('input',ev=>{
 function saveAction(t){const id=t.dataset.id;const p=S.products[id];if(!p)return;const ac=Object.assign({},p.action||{});ac[t.dataset.actF]=t.value;if(JSON.stringify(ac)===JSON.stringify(p.action||{}))return;p.action=ac;w(()=>db.doc('products/'+id).update({action:ac}))}
 document.getElementById('tabbar').addEventListener('click',e=>{const b=e.target.closest('button[data-tab]');if(b)setTab(b.dataset.tab)});
 
+function sizeLabels(name,n){
+  name=String(name||'');
+  const unitRe=/(ml|ltr|lt|cm|mm|inch|kg|pcs|pc|l|g)\b/i;
+  const fill=arr=>{const u=(arr.map(x=>(x.match(unitRe)||[])[0]).filter(Boolean)[0])||'';
+    return arr.map(x=>{x=x.trim();if(/^[\d.*x× ]+$/.test(x)&&u)x=x+' '+u;return x.replace(/(\d)(ml|ltr|lt|cm|mm|kg|l|g)\b/i,'$1 $2')})};
+  const segs=name.split('/');
+  if(n>1&&segs.length===n){
+    const out=segs.map(s=>s.trim());
+    let f=out[0];const cut=Math.max(f.lastIndexOf('('),f.lastIndexOf('-'));if(cut>=0)f=f.slice(cut+1);else{const d=f.search(/\d/);if(d>0)f=f.slice(d)}
+    out[0]=f.trim();
+    out[n-1]=out[n-1].replace(/\s*\(.*$/,'').replace(/\)+\s*$/,'').replace(/\s*-\s+.*$/,'').trim();
+    return fill(out);
+  }
+  const toks=name.match(/\d+(?:[.*x×]\d+)*\s*(?:ml|ltr|lt|cm|mm|inch|kg|pcs|pc|l|g)\b/gi)||[];
+  if(toks.length===n)return fill(toks);
+  return [];
+}
+function pricing(e){
+  if(!e)return {mode:'none',variants:[]};
+  if(e.pricing&&e.pricing.mode)return e.pricing;
+  const p=S.products[e.productId]||{};
+  const s=String(e.price==null?'':e.price).trim();
+  const nums=(s.replace(/,/g,'').match(/\d+(\.\d+)?/g)||[]).map(Number);
+  if(!nums.length)return {mode:'none',variants:[]};
+  if(nums.length===2&&/^\s*\d[\d.,]*\s*[-–]\s*\d/.test(s))return {mode:'range',min:Math.min(...nums),max:Math.max(...nums),variants:[]};
+  if(nums.length===1)return {mode:'single',variants:[{size:'',price:nums[0]}]};
+  const lab=sizeLabels(p.name,nums.length);
+  return {mode:'sizes',variants:nums.map((n,i)=>({size:lab[i]||'',price:n}))};
+}
+function priceList(e){const pr=pricing(e);return pr.mode==='none'?[]:pr.mode==='range'?[pr.min,pr.max]:pr.variants.map(v=>+v.price)}
+function priceBounds(e){const v=priceList(e).filter(x=>!isNaN(x));return v.length?[Math.min(...v),Math.max(...v)]:null}
+function priceText(e){const b=priceBounds(e);if(!b)return '';return b[0]===b[1]?rupee(b[0]):rupee(b[0])+'–'+rupee(b[1])}
+function legacyPrice(pr){return pr.mode==='none'?'':pr.mode==='range'?pr.min+'-'+pr.max:pr.variants.map(v=>v.price).join('/')}
+function sizeText(e){const pr=pricing(e);if(pr.mode==='range')return 'Range '+rupee(pr.min)+' to '+rupee(pr.max);return pr.variants.map(v=>(v.size?v.size+' ':'')+rupee(v.price)).join('; ')}
+function priceChange(prev,cur){
+  const an=priceList(prev),bn=priceList(cur);
+  if(!an.length||!bn.length||JSON.stringify(an)===JSON.stringify(bn))return null;
+  const pa=pricing(prev),pb=pricing(cur);const lab=x=>x.variants.map(v=>norm(v.size));
+  const la=lab(pa),lb=lab(pb);const ok=pa.mode!=='range'&&pb.mode!=='range'&&new Set(la).size===la.length&&new Set(lb).size===lb.length&&(la.length>1||lb.length>1)&&!la.includes('')&&!lb.includes('');
+  if(ok){const parts=[];let delta=0;
+    pb.variants.forEach(v=>{const o=pa.variants.find(x=>norm(x.size)===norm(v.size));if(!o)parts.push('new '+v.size+' '+rupee(v.price));else if(+o.price!==+v.price){parts.push(v.size+' '+rupee(o.price)+' → '+rupee(v.price));delta+=v.price-o.price}});
+    pa.variants.forEach(o=>{if(!pb.variants.some(x=>norm(x.size)===norm(o.size)))parts.push(o.size+' dropped')});
+    return {k:'price',t:parts.join('; '),dir:delta>0?'up':delta<0?'down':''};
+  }
+  const sa=an.reduce((x,y)=>x+y,0)/an.length,sb=bn.reduce((x,y)=>x+y,0)/bn.length;
+  return {k:'price',t:priceText(prev)+' → '+priceText(cur),dir:sb>sa?'up':sb<sa?'down':''};
+}
+function needsPrice(p){const l=latest(p.id);return !!l&&l.status!=='removed'&&pricing(l).mode==='none'}
+function vmmOf(p){
+  const v=Object.assign({},p.vmm||{});const a=p.action||{};
+  if(!p.vmm&&a.text&&!a.done){v.decision='pursue';v.stage=/wip|develop/i.test(a.text)?'wip':''}
+  if(v.next==null)v.next=a.text||'';if(v.owner==null)v.owner=a.owner||'';if(v.target==null)v.target=a.due||'';
+  if(!Array.isArray(v.photos))v.photos=[];
+  return v;
+}
+function pipe(p){
+  const v=vmmOf(p);
+  if(v.decision==='pursue'&&v.stage==='launched')return 'launched';
+  if(v.decision==='not')return 'notpursuing';
+  if(v.decision==='pursue')return v.stage==='wip'?'wip':'pursue';
+  const s=bsEval(p).stage;return s==='best'?'decide':s;
+}
+function badge(p){const k=pipe(p);const ev=bsEval(p);if(['pursue','wip','launched','notpursuing'].includes(k))return {label:PIPE[k][0],tone:PIPE[k][1],k};return {label:ev.label,tone:ev.tone,k}}
+function vmmGap(p){const v=vmmOf(p);const m=priceNum(v.mrp);const b=priceBounds(latest(p.id));if(m==null||!b)return null;const c=b[0];return {comp:c,vmm:m,diff:m-c,pct:c?Math.round((m-c)/c*100):0}}
+function gapLine(p){const g=vmmGap(p);if(!g)return '';if(g.diff===0)return 'Same MRP as the competitor';return `VMM is ${rupee(Math.abs(g.diff))} (${Math.abs(g.pct)}%) ${g.diff<0?'cheaper':'dearer'} than the competitor’s ${rupee(g.comp)}`}
+function isOverdue(p){const k=pipe(p);const t=vmmOf(p).target;return (k==='pursue'||k==='wip')&&!!t&&t<today()}
+function setPath(p,path,val){const [a,b]=path.split('.');if(a==='vmm'){const v=vmmOf(p);v[b]=val;if(b==='stage'&&val==='launched'&&!v.launchDate)v.launchDate=today();p.vmm=v;return {vmm:v}}p[a]=val;return {[a]:val}}
+let pfT=null;
+function savePf(t){const p=S.products[t.dataset.id];if(!p)return;const key=t.dataset.pf.split('.')[1];const cur=vmmOf(p)[key];if(String(cur==null?'':cur)===t.value)return;const upd=setPath(p,t.dataset.pf,t.value);w(()=>db.doc('products/'+p.id).update(upd));const g=$('#vmm-gap');if(g)g.textContent=gapLine(p)}
+
+/* weekly plan */
+function plan(){
+  const c=S.cfg.plan;if(c&&c.rounds&&c.rounds.length)return c;
+  const st=Object.values(S.stores);const has=(s,arr)=>arr.some(n=>cmpName(s.name)===cmpName(n));
+  return {weekday:4,anchor:'2026-08-20',rounds:[{name:'Home Centre',stores:st.filter(s=>has(s,['Home Centre'])).map(s=>s.id)},{name:'Saket',stores:st.filter(s=>has(s,['IKEA','Home Stop','H&M Home','Pure Home and Living','PHL'])).map(s=>s.id)}]};
+}
+function roundIndex(monday){const P=plan();const n=P.rounds.length;const wks=Math.round(daysBetween(weekStart(P.anchor),monday)/7);return ((wks%n)+n)%n}
+function roundFor(monday){return plan().rounds[roundIndex(monday)]}
+function visitDay(monday){return addDays(monday,((plan().weekday||4)+6)%7)}
+function weekInfo(monday){
+  const end=addDays(monday,6);const inWk=d=>d>=monday&&d<=end;
+  const visits=Object.values(S.visits).filter(v=>inWk(v.date));
+  const entries=Object.values(S.entries).filter(e=>inWk(e.date)&&S.products[e.productId]);
+  const round=roundFor(monday)||{name:'',stores:[]};
+  const stat=sid=>{const es=entries.filter(e=>S.products[e.productId].storeId===sid);const vs=visits.filter(x=>x.storeId===sid);
+    return {sid,tracked:activeProducts().filter(p=>p.storeId===sid&&(p.firstSeen||'')<=end).length,checked:new Set(es.map(e=>e.productId)).size,visited:es.length>0||vs.length>0,
+      dates:[...new Set([...vs.map(x=>x.date),...es.map(e=>e.date)])].sort(),by:[...new Set(es.map(e=>S.products[e.productId].buyer).filter(Boolean))].sort()}};
+  const planned=round.stores.filter(id=>S.stores[id]).map(stat);
+  const extra=[...new Set([...visits.map(v=>v.storeId),...entries.map(e=>S.products[e.productId].storeId)])].filter(id=>S.stores[id]&&!round.stores.includes(id)).map(stat);
+  const present=new Set();visits.forEach(v=>(v.attendees||[]).forEach(a=>present.add(a)));entries.forEach(e=>{if(e.by&&e.by!=='Import')present.add(e.by)});
+  const wk=S.weeks[monday]||{};const att=wk.att||{};
+  const roster=team().map(n=>({name:n,auto:present.has(n),status:att[n]||(present.has(n)?'Present':'')}));
+  const byBuyer={};entries.forEach(e=>{const b=S.products[e.productId].buyer||'—';byBuyer[b]=(byBuyer[b]||0)+1});
+  return {monday,end,round,planned,extra,roster,entries,visits,byBuyer,note:wk.note||'',covered:planned.filter(s=>s.visited).length};
+}
+function weekLabel(monday){return fd(monday)+' – '+fd(addDays(monday,6),'y')}
+
+/* price editor (used in the update and new-product sheets) */
+function priceEditorInit(pr){
+  const v=(pr.variants||[]).map(x=>({size:x.size||'',price:x.price==null?'':String(x.price)}));
+  return {mode:pr.mode==='none'?'single':pr.mode,single:v[0]||{size:'',price:''},variants:v.length>1?v:[v[0]||{size:'',price:''},{size:'',price:''}],min:pr.min==null?'':String(pr.min),max:pr.max==null?'':String(pr.max)};
+}
+function priceEditorHTML(){
+  const s=sheetState.pr;
+  let h=`<div class="seg" style="margin:10px 12px 6px">${[['single','One price'],['sizes','By size'],['range','Price range']].map(([k,l])=>`<button data-act="pmode" data-k="${k}" class="${s.mode===k?'on':''}">${l}</button>`).join('')}</div>`;
+  if(s.mode==='single')h+=`<div class="field"><label for="pe-size">Size</label><input id="pe-size" placeholder="e.g. 320 ml, 26 cm, set of 3" value="${esc(s.single.size)}"></div><div class="field"><label for="pe-price">MRP (₹)</label><input id="pe-price" inputmode="decimal" placeholder="e.g. 399" value="${esc(s.single.price)}"></div>`;
+  else if(s.mode==='sizes')h+=s.variants.map((v,i)=>`<div class="field vrow"><input class="pe-vs" placeholder="Size, e.g. 280 ml" value="${esc(v.size)}" aria-label="Size ${i+1}"><input class="pe-vp" inputmode="decimal" placeholder="MRP ₹" value="${esc(v.price)}" aria-label="MRP for size ${i+1}"><button class="lnk" data-act="pdel" data-i="${i}" aria-label="Remove this size">×</button></div>`).join('')+`<button class="row" data-act="padd" style="color:var(--tint)">Add another size</button>`;
+  else h+=`<div class="field"><label for="pe-min">From (₹)</label><input id="pe-min" inputmode="decimal" placeholder="Lowest MRP" value="${esc(s.min)}"></div><div class="field"><label for="pe-max">To (₹)</label><input id="pe-max" inputmode="decimal" placeholder="Highest MRP" value="${esc(s.max)}"></div>`;
+  return h;
+}
+function readPriceEditor(){
+  const s=sheetState&&sheetState.pr;if(!s||!$('#pe-box'))return;
+  if(s.mode==='single'){s.single={size:$('#pe-size').value.trim(),price:$('#pe-price').value.trim()}}
+  else if(s.mode==='sizes'){const a=[...document.querySelectorAll('#pe-box .pe-vs')],b=[...document.querySelectorAll('#pe-box .pe-vp')];s.variants=a.map((x,i)=>({size:x.value.trim(),price:b[i].value.trim()}))}
+  else{s.min=$('#pe-min').value.trim();s.max=$('#pe-max').value.trim()}
+}
+function priceEditorResult(){
+  readPriceEditor();const s=sheetState.pr;const num=x=>{const m=String(x).replace(/,/g,'').match(/\d+(\.\d+)?/);return m?+m[0]:null};
+  if(s.mode==='single'){const p=num(s.single.price);return p==null?{mode:'none',variants:[]}:{mode:'single',variants:[{size:s.single.size,price:p}]}}
+  if(s.mode==='sizes'){const v=s.variants.map(x=>({size:x.size,price:num(x.price)})).filter(x=>x.price!=null);return !v.length?{mode:'none',variants:[]}:v.length===1?{mode:'single',variants:v}:{mode:'sizes',variants:v}}
+  const a=num(s.min),b=num(s.max);if(a==null&&b==null)return {mode:'none',variants:[]};
+  const lo=Math.min(a==null?b:a,b==null?a:b),hi=Math.max(a==null?b:a,b==null?a:b);
+  return lo===hi?{mode:'single',variants:[{size:'',price:lo}]}:{mode:'range',min:lo,max:hi,variants:[]};
+}
+
+/* ---------- Home ---------- */
+function ptable(list){
+  const ts=S.pf.ts||{k:'recent',d:-1};
+  const val={product:p=>p.name.toLowerCase(),store:p=>storeName(p.storeId).toLowerCase(),buyer:p=>(p.buyer||'').toLowerCase(),cat:p=>(p.category||'').toLowerCase(),mrp:p=>{const b=priceBounds(latest(p.id));return b?b[0]:-1},weeks:p=>weeksOnFloor(p),stage:p=>PIPE_ORDER.indexOf(pipe(p)),vmm:p=>priceNum(vmmOf(p).mrp)==null?-1:priceNum(vmmOf(p).mrp),gap:p=>{const g=vmmGap(p);return g?g.pct:-9999},recent:p=>(latest(p.id)||{}).date||''};
+  const fn=val[ts.k]||val.recent;const rows=list.slice().sort((a,b)=>{const x=fn(a),y=fn(b);return (x<y?-1:x>y?1:0)*ts.d});
+  const th=(k,l,cls)=>`<th class="${cls||''}"><button data-act="tsort" data-k="${k}">${l}${ts.k===k?(ts.d>0?' ▲':' ▼'):''}</button></th>`;
+  return `<div class="tbl ptbl"><table><thead><tr><th></th>${th('product','Product')}${th('store','Store')}${th('buyer','Buyer')}${th('cat','Category')}${th('mrp','Sizes and MRP')}${th('weeks','Weeks','n')}${th('stage','Stage')}${th('vmm','VMM MRP','n')}${th('gap','Gap','n')}${th('recent','Last checked')}</tr></thead><tbody>${rows.map(p=>{const l=latest(p.id)||{};const b=badge(p);const v=vmmOf(p);const g=vmmGap(p);const stx=sizeText(l);
+    return `<tr class="tap" data-act="product" data-id="${p.id}"><td><span class="thumb" style="width:40px;height:40px">${img(cover(p))||IC.img}</span></td><td><b>${esc(p.name)}</b>${p.brand&&cmpName(p.brand)!==cmpName(storeShort(p.storeId))?`<div class="sub2">${esc(p.brand)}</div>`:''}</td><td>${esc(storeName(p.storeId))}</td><td>${esc(p.buyer||'')}</td><td>${esc((p.category||'').replace(/^HH_/,''))}</td><td>${stx?esc(stx):'<span style="color:var(--warn)">Price needed</span>'}</td><td class="n">${weeksOnFloor(p)}</td><td><span class="pill ${b.tone}">${esc(b.label)}</span></td><td class="n">${priceNum(v.mrp)!=null?esc(rupee(priceNum(v.mrp))):v.equiv==='no'?'Not in range':'—'}</td><td class="n ${g?(g.diff<0?'down':g.diff>0?'up':''):''}">${g?(g.pct>0?'+':'')+g.pct+'%':'—'}</td><td class="n">${l.date?esc(fd(l.date)):''}</td></tr>`}).join('')}</tbody></table></div>`;
+}
+
+/* ---------- Product detail ---------- */
+function insStoreChips(){
+  const stores=Object.values(S.stores).sort((a,b)=>a.name.localeCompare(b.name));const sf=S.ins.store;
+  return `<div class="chips">${[['all','All stores'],...stores.map(s=>[s.id,s.name+(s.location?' '+s.location:'')])].map(([k,l])=>`<button class="chip ${sf===k?'on':''}" data-act="ins-store" data-v="${k}">${esc(l)}</button>`).join('')}</div>`;
+}
+function insReview(){
+  const sf=S.ins.store;let h=insStoreChips();
+  const ps=activeProducts().filter(p=>sf==='all'||p.storeId===sf);
+  const rows=ps.map(p=>({p,k:pipe(p),ev:bsEval(p),l:latest(p.id),v:vmmOf(p)}));const n=k=>rows.filter(r=>r.k===k).length;
+  const allE=Object.values(S.entries).filter(e=>S.products[e.productId]&&(sf==='all'||S.products[e.productId].storeId===sf));
+  h+=`<div class="tiles" style="margin-top:14px">
+   <button class="tile tap" data-act="goprod" data-status="decide"><span class="k"><i style="background:var(--gold)"></i>Need a decision</span><span class="v">${n('decide')}</span></button>
+   <button class="tile tap" data-act="goprod" data-status="pursue"><span class="k"><i style="background:var(--good)"></i>Being pursued</span><span class="v">${n('pursue')+n('wip')}</span></button>
+   <button class="tile tap" data-act="goprod" data-status="launched"><span class="k"><i style="background:var(--tint)"></i>Launched</span><span class="v">${n('launched')}</span></button>
+   <button class="tile tap" data-act="goprod" data-status="price"><span class="k"><i style="background:var(--warn)"></i>Price needed</span><span class="v">${ps.filter(needsPrice).length}</span></button></div>`;
+  const dec=rows.filter(r=>r.k==='decide');
+  h+=`<div class="cols"><div><div class="cap">Best sellers waiting for a decision</div>`;
+  h+=dec.length?`<div class="group">${dec.slice(0,8).map(r=>prodRow(r.p,storeShort(r.p.storeId)+' · '+(priceText(r.l)||'Price needed')+' · '+(r.v.equiv==='no'?'not in VMM range':r.v.equiv==='yes'?'VMM has it':r.v.equiv==='similar'?'VMM has similar':'VMM check pending'))).join('')}</div>${dec.length>8?`<p class="foot">${dec.length-8} more in Products → Need a decision.</p>`:''}`:`<div class="note">Nothing is waiting. A product lands here when it meets both must-haves and ${rules().needSignals} signals.</div>`;
+  const od=rows.filter(r=>isOverdue(r.p));
+  h+=`<div class="cap">Past the target date</div>`;
+  h+=od.length?`<div class="group">${od.map(r=>prodRow(r.p,(r.v.owner?r.v.owner+' · ':'')+(r.v.next||'No next step written')+' · due '+fd(r.v.target))).join('')}</div>`:`<div class="note">No pursued product is past its target date.</div>`;
+  h+=`</div><div>`;
+  const mx=Math.max(1,...PIPE_ORDER.map(k=>n(k)));const col={watching:'var(--label3)',candidate:'var(--tint)',decide:'var(--gold)',pursue:'var(--good)',wip:'var(--good)',launched:'var(--good)',notpursuing:'var(--label3)',dropped:'var(--bad)'};
+  h+=`<div class="cap">From spotted to launched</div><div class="group">${PIPE_ORDER.map(k=>`<button class="bar tap" style="width:100%" data-act="goprod" data-status="${k==='wip'?'pursue':k}"><span class="lb">${esc(PIPE_LONG[k])}</span><span class="tr"><i style="width:${n(k)/mx*100}%;background:${col[k]}"></i></span><span class="n">${n(k)}</span></button>`).join('')}</div>`;
+  const R=rules();h+=`<p class="foot">Best seller: ${R.minWeeks} weeks on floor${R.noDiscount?', no discount,':''} and any ${R.needSignals} of 4 signals.</p>`;
+  h+=`</div></div>`;
+  // VMM comparison
+  const eq={yes:0,similar:0,no:0,'':0};rows.forEach(r=>{eq[r.v.equiv||'']++});
+  h+=`<div class="cap">Against the VMM range</div><div class="facts" style="margin-top:0"><div><span class="k">VMM has it</span><span class="v">${eq.yes}</span></div><div><span class="k">VMM has similar</span><span class="v">${eq.similar}</span></div><div><span class="k">Not in our range</span><span class="v">${eq.no}</span></div><div><span class="k">Not checked yet</span><span class="v">${eq['']}</span></div></div>`;
+  const gaps=rows.map(r=>({r,g:vmmGap(r.p)})).filter(x=>x.g).sort((a,b)=>b.g.pct-a.g.pct);
+  h+=gaps.length?`<div class="tbl" style="margin-top:10px"><table><thead><tr><th>Product</th><th>Store</th><th>Competitor MRP</th><th>VMM MRP</th><th>Gap</th><th>Stage</th></tr></thead><tbody>${gaps.slice(0,20).map(({r,g})=>`<tr><td><button class="lnk" style="padding:0;font-size:14px;text-align:left" data-act="product" data-id="${r.p.id}">${esc(r.p.name)}</button></td><td>${esc(storeShort(r.p.storeId))}</td><td class="n">${esc(priceText(r.l))}</td><td class="n">${esc(rupee(g.vmm))}</td><td class="n ${g.diff<0?'down':g.diff>0?'up':''}">${g.pct>0?'+':''}${g.pct}%</td><td>${esc(PIPE[r.k][0])}</td></tr>`).join('')}</tbody></table></div>`:`<p class="foot">Add the VMM MRP on a product’s page to see price gaps here.</p>`;
+  // by category
+  const cat={};rows.forEach(r=>{const k=(r.p.category||'Uncategorised').replace(/^HH_/,'');const c=cat[k]=cat[k]||{t:0,bs:0,pu:0,la:0};c.t++;if(r.ev.stage==='best')c.bs++;if(r.k==='pursue'||r.k==='wip')c.pu++;if(r.k==='launched')c.la++});
+  const cats=Object.entries(cat).sort((a,b)=>b[1].bs-a[1].bs||b[1].t-a[1].t);
+  h+=`<div class="cap">By category</div><div class="tbl"><table><thead><tr><th>Category</th><th>Tracked</th><th>Best sellers</th><th>Being pursued</th><th>Launched</th></tr></thead><tbody>${cats.slice(0,S.ins.allCats?999:10).map(([k,c])=>`<tr><td>${esc(k)}</td><td class="n">${c.t}</td><td class="n">${c.bs||'—'}</td><td class="n">${c.pu||'—'}</td><td class="n">${c.la||'—'}</td></tr>`).join('')}</tbody></table></div>${cats.length>10?`<button class="lnk" style="font-size:15px" data-act="ins-cats">${S.ins.allCats?'Show fewer':'Show all '+cats.length+' categories'}</button>`:''}`;
+  // price movements
+  const pm=[];for(const r of rows){const a=ents(r.p.id);for(let i=1;i<a.length;i++){const d=diff(a[i-1],a[i]).find(c=>c.k==='price');if(d)pm.push({p:r.p,e:a[i],d,from:a[i-1]})}}
+  pm.sort((a,b)=>b.e.date.localeCompare(a.e.date));
+  h+=`<div class="cap">Competitor price movements</div>`;
+  h+=pm.length?`<div class="tbl"><table><thead><tr><th>Product</th><th>Store</th><th>From</th><th>To</th><th>Seen</th></tr></thead><tbody>${pm.slice(0,25).map(x=>`<tr><td><button class="lnk" style="padding:0;font-size:14px;text-align:left" data-act="product" data-id="${x.p.id}">${esc(x.p.name)}</button></td><td>${esc(storeShort(x.p.storeId))}</td><td class="n">${esc(priceText(x.from))}</td><td class="n ${x.d.dir}">${esc(priceText(x.e))}</td><td class="n">${esc(fd(x.e.date))}</td></tr>`).join('')}</tbody></table></div>`:`<div class="note">No price changes recorded yet. They show here when an MRP differs from the visit before.</div>`;
+  const sig=rows.filter(r=>r.l&&['selling-fast','sold-out','restocked','removed','on-sale'].includes(r.l.status));
+  h+=`<div class="cols"><div><div class="cap">Latest stock signals</div>`;
+  h+=sig.length?`<div class="group">${sig.slice(0,12).map(r=>prodRow(r.p,STATUS_BY[r.l.status].label+' · '+rel(r.l.date)+' · '+storeShort(r.p.storeId))).join('')}</div>`:`<div class="note">No selling-fast, sold-out or removed signals at the latest visits.</div>`;
+  h+=`</div><div>`;
+  const byB={};rows.forEach(r=>{const b=r.p.buyer||'—';const x=byB[b]=byB[b]||{t:0,bs:0};x.t++;if(r.ev.stage==='best')x.bs++});
+  const bb=Object.entries(byB).sort((a,b)=>b[1].t-a[1].t);const bm=Math.max(1,...bb.map(x=>x[1].t));
+  h+=`<div class="cap">Products by buyer</div><div class="group">${bb.map(([k,x])=>`<button class="bar tap" style="width:100%" data-act="goprod-buyer" data-v="${esc(k)}"><span class="lb" style="display:flex;align-items:center;gap:8px"><span class="av" style="width:22px;height:22px;font-size:9px;background:${avColor(k)}">${esc(initials(k))}</span>${esc(k)}</span><span class="tr"><i style="width:${x.t/bm*100}%;background:${avColor(k)}"></i></span><span class="n">${x.t}</span></button>`).join('')||'<div class="row">No products</div>'}</div>`;
+  h+=`</div></div>`;
+  h+=`<div class="cap">Share</div><div class="group"><button class="row" data-act="export"><span class="thumb" style="width:36px;height:36px;color:var(--good)">${IC.dl}</span><span class="grow"><div class="ttl">Download Excel report</div><div class="meta">Every product with sizes, MRP, stage, VMM comparison and full history</div></span>${IC.chev}</button><button class="row" data-act="import"><span class="thumb" style="width:36px;height:36px;color:var(--tint)">${IC.ul}</span><span class="grow"><div class="ttl">Import from Excel</div><div class="meta">Shelfwatch template, or a benchmarking sheet with clean columns</div></span>${IC.chev}</button></div>`;
+  return h;
+}
+function insWeekly(){
+  const cur=weekStart(today());const mon=S.ins.week||cur;const wi=weekInfo(mon);const vd=visitDay(mon);
+  let h=`<div class="wnav"><button class="ibtn" data-act="wk" data-d="-7" aria-label="Previous week">${IC.back}</button><div class="wl"><b>${esc(weekLabel(mon))}</b><span>${mon===cur?'This week':mon>cur?'Upcoming':daysBetween(mon,cur)/7+' week'+(daysBetween(mon,cur)/7===1?'':'s')+' ago'} · ${esc(wi.round.name?wi.round.name+' round':'No round set')} · visit day ${esc(fd(vd,'dow'))}</span></div><button class="ibtn" data-act="wk" data-d="7" aria-label="Next week" style="transform:scaleX(-1)">${IC.back}</button></div>`;
+  const pres=wi.roster.filter(r=>r.status==='Present').length,abs=wi.roster.filter(r=>r.status&&r.status!=='Present').length,unk=wi.roster.filter(r=>!r.status).length;
+  h+=`<div class="tiles"><div class="tile"><span class="k">Stores covered</span><span class="v">${wi.covered}<span class="of"> of ${wi.planned.length}</span></span></div><div class="tile"><span class="k">Present</span><span class="v">${pres}<span class="of"> of ${wi.roster.length}</span></span></div><div class="tile"><span class="k">Absent</span><span class="v">${abs}</span></div><div class="tile"><span class="k">Updates logged</span><span class="v">${wi.entries.length}</span></div></div>`;
+  const srow=(s,plannedRow)=>{const part=s.visited&&s.tracked&&s.checked<s.tracked;
+    return `<div class="row"><span class="grow"><div class="ttl">${esc(storeName(s.sid))}</div><div class="meta" style="white-space:normal">${s.visited?`Visited ${esc(s.dates.map(d=>fd(d,'dow')).join(', '))} · ${s.checked} of ${s.tracked} products checked${s.by.length?' · '+esc(s.by.join(', ')):''}`:(mon>cur||(mon===cur&&today()<=vd)?'Planned for '+esc(fd(vd,'dow')):'Not visited this week')}</div></span><span class="pill ${s.visited?(part?'warn':'good'):(mon>=cur?'':'bad')}">${s.visited?(part?'Partly covered':'Covered'):(mon>cur||(mon===cur&&today()<=vd)?'Planned':'Missed')}</span></div>`};
+  h+=`<div class="cols"><div><div class="cap">Stores planned this week</div>`;
+  h+=wi.planned.length?`<div class="group">${wi.planned.map(s=>srow(s,true)).join('')}</div>`:`<div class="note">No stores are set for this round. Set them in Settings → Visit plan.</div>`;
+  if(wi.extra.length)h+=`<div class="cap">Also visited</div><div class="group">${wi.extra.map(s=>srow(s,false)).join('')}</div>`;
+  const bb=Object.entries(wi.byBuyer).sort((a,b)=>b[1]-a[1]);const bm=Math.max(1,...bb.map(x=>x[1]));
+  h+=`<div class="cap">Updates by buyer</div>`;
+  h+=bb.length?`<div class="group">${bb.map(([k,x])=>`<div class="bar"><span class="lb" style="display:flex;align-items:center;gap:8px"><span class="av" style="width:22px;height:22px;font-size:9px;background:${avColor(k)}">${esc(initials(k))}</span>${esc(k)}</span><span class="tr"><i style="width:${x/bm*100}%;background:${avColor(k)}"></i></span><span class="n">${x}</span></div>`).join('')}</div>`:`<div class="note">No updates logged in this week.</div>`;
+  h+=`</div><div><div class="cap">Attendance</div><div class="group">${wi.roster.map(r=>`<div class="field"><label for="att-${esc(cmpName(r.name))}" style="width:auto;flex:1;display:flex;align-items:center;gap:10px"><span class="av" style="background:${avColor(r.name)}">${esc(initials(r.name))}</span>${esc(r.name)}</label><select id="att-${esc(cmpName(r.name))}" data-att="${esc(r.name)}" data-wk="${mon}" style="flex:none;width:auto;max-width:56%;color:var(--${r.status==='Present'?'good':r.status?'bad':'label2'});font-weight:${r.status?600:400}"><option value="">Not recorded</option><option ${r.status==='Present'?'selected':''}>Present</option>${reasons().map(x=>`<option value="${esc(x)}" ${r.status===x?'selected':''}>Absent: ${esc(x)}</option>`).join('')}</select></div>`).join('')}</div>`;
+  h+=`<p class="foot">${unk?unk+' not recorded. ':''}Anyone listed on a visit or who logged an update is marked present automatically. Pick a reason for anyone who was absent.</p>`;
+  h+=`<div class="cap">Note for the tracking team</div><div class="group"><textarea id="wk-note" data-wk="${mon}" placeholder="Anything they should know about this week" style="min-height:72px">${esc(wi.note)}</textarea></div>`;
+  h+=`<div style="margin-top:14px"><button class="btn sec2" data-act="export-week" data-wk="${mon}">${IC.dl} Download this week’s report (Excel)</button></div>`;
+  h+=`</div></div>`;
+  return h;
+}
+function insPipeline(){
+  let h=insStoreChips();const sf=S.ins.store;
+  const ps=activeProducts().filter(p=>sf==='all'||p.storeId===sf);
+  const by={};ps.forEach(p=>{const k=pipe(p);(by[k]=by[k]||[]).push(p)});
+  const sect=(k,meta,empty)=>{const a=(by[k]||[]).sort((x,y)=>weeksOnFloor(y)-weeksOnFloor(x));return `<div class="cap">${esc(PIPE_LONG[k])} · ${a.length}</div>${a.length?`<div class="group">${a.slice(0,10).map(p=>prodRow(p,meta(p))).join('')}</div>${a.length>10?`<button class="lnk" style="font-size:15px" data-act="goprod" data-status="${k==='wip'?'pursue':k}">See all ${a.length} in Products</button>`:''}`:`<div class="note">${esc(empty)}</div>`}`};
+  const base=p=>storeShort(p.storeId)+' · '+(priceText(latest(p.id))||'Price needed');
+  const la=by.launched||[];
+  h+=`<div class="cap">${esc(PIPE_LONG.launched)} · ${la.length}</div>`;
+  h+=la.length?`<div class="tbl"><table><thead><tr><th>Product</th><th>Seen at</th><th>Competitor MRP</th><th>VMM MRP</th><th>Launched</th><th>Weeks to launch</th><th>Sell-through</th><th>Units</th><th>Sales value</th></tr></thead><tbody>${la.map(p=>{const v=vmmOf(p);const fs=p.firstSeen||(ents(p.id)[0]||{}).date;const wk=v.launchDate&&fs?Math.max(0,Math.round(daysBetween(fs,v.launchDate)/7)):null;return `<tr><td><button class="lnk" style="padding:0;font-size:14px;text-align:left" data-act="product" data-id="${p.id}">${esc(v.article||p.name)}</button></td><td>${esc(storeShort(p.storeId))}</td><td class="n">${esc(priceText(latest(p.id))||'—')}</td><td class="n">${priceNum(v.mrp)!=null?esc(rupee(priceNum(v.mrp))):'—'}</td><td class="n">${v.launchDate?esc(fd(v.launchDate,'y')):'—'}</td><td class="n">${wk==null?'—':wk}</td><td class="n">${v.st?esc(v.st)+'%':'—'}</td><td class="n">${v.units?esc(v.units):'—'}</td><td class="n">${priceNum(v.value)!=null?esc(rupee(priceNum(v.value))):'—'}</td></tr>`}).join('')}</tbody></table></div>`:`<div class="note">Nothing launched yet. Mark a pursued product as Launched on its page to track sell-through here.</div>`;
+  h+=sect('wip',p=>{const v=vmmOf(p);return (v.owner?v.owner+' · ':'')+(v.next||'No next step written')+(v.target?' · target '+fd(v.target):'')},'Nothing in development.');
+  h+=sect('pursue',p=>{const v=vmmOf(p);return (v.owner?v.owner+' · ':'')+(v.next||'No next step written')+(v.target?' · target '+fd(v.target):'')},'No product is marked Pursue yet.');
+  h+=sect('decide',p=>base(p)+' · '+bsEval(p).w+' weeks on floor','No best seller is waiting for a decision.');
+  h+=sect('candidate',p=>base(p)+' · '+bsEval(p).opt+' of '+rules().needSignals+' signals','No candidates yet.');
+  h+=sect('notpursuing',p=>vmmOf(p).reason||'No reason written','Nothing has been turned down.');
+  return h;
+}
+
+/* ---------- Settings ---------- */
+async function exportWeek(mon){
+  if(!(await loadXLSX())){toast('Excel tools didn’t load. Reload the app and try again.');return}
+  const wi=weekInfo(mon);const wb=XLSX.utils.book_new();
+  const pres=wi.roster.filter(r=>r.status==='Present'),abs=wi.roster.filter(r=>r.status&&r.status!=='Present'),unk=wi.roster.filter(r=>!r.status);
+  const sum=[['Benchmarking weekly report'],['Week',weekLabel(mon)],['Round',wi.round.name||''],['Visit day',fd(visitDay(mon),'dow')],['Stores planned',wi.planned.length],['Stores covered',wi.covered],['Present',pres.length],['Absent',abs.length],['Attendance not recorded',unk.length],['Updates logged',wi.entries.length],['Note',wi.note],[],
+    ['Store','Planned','Visited on','Products tracked','Products checked','Status','Buyers who logged'],
+    ...wi.planned.map(s=>[storeName(s.sid),'Yes',s.dates.join(', '),s.tracked,s.checked,s.visited?(s.checked<s.tracked?'Partly covered':'Covered'):'Not visited',s.by.join(', ')]),
+    ...wi.extra.map(s=>[storeName(s.sid),'No',s.dates.join(', '),s.tracked,s.checked,'Extra visit',s.by.join(', ')]),[],
+    ['Name','Attendance','Reason'],...wi.roster.map(r=>[r.name,r.status==='Present'?'Present':r.status?'Absent':'Not recorded',r.status&&r.status!=='Present'?r.status:''])];
+  const ws1=XLSX.utils.aoa_to_sheet(sum);ws1['!cols']=[30,16,24,16,16,16,30].map(w=>({wch:w}));XLSX.utils.book_append_sheet(wb,ws1,'Summary');
+  const rows=wi.entries.map(e=>{const p=S.products[e.productId];const a=ents(p.id);const i=a.indexOf(e);return {'Date':e.date,'Store':storeName(p.storeId),'Buyer':p.buyer,'Category':p.category,'Product':p.name,'Sizes and MRP':sizeText(e),'Fixture':e.fixture,'Status':(STATUS_BY[e.status]||{}).label||'','Observation':e.observation,'What changed':changeLine(diff(i>0?a[i-1]:null,e))||'No change','Best-seller check':bsEval(p).label,'Stage':PIPE_LONG[pipe(p)]||'','Photos':(e.photos||[]).length,'Logged by':e.by||''}}).sort((a,b)=>a.Store.localeCompare(b.Store)||(a.Buyer||'').localeCompare(b.Buyer||'')||a.Product.localeCompare(b.Product));
+  const ws2=XLSX.utils.json_to_sheet(rows.length?rows:[{'Date':'','Store':'No updates logged this week'}]);ws2['!cols']=[11,22,10,22,34,30,18,14,50,34,16,26,7,10].map(w=>({wch:w}));XLSX.utils.book_append_sheet(wb,ws2,'Updates this week');
+  const out=XLSX.write(wb,{bookType:'xlsx',type:'array'});
+  try{await downloads.save({filename:'Shelfwatch_week_'+mon+'.xlsx',data:new Blob([out])})}catch(e){toast('Couldn’t save the file here')}
+}
+
+/* ---------- v1.2 event wiring ---------- */
+function saveWeek(mon,patch){const cur=Object.assign({att:{},note:''},S.weeks[mon]||{});delete cur.id;const next=Object.assign(cur,patch);S.weeks[mon]=Object.assign({id:mon},next);return w(()=>db.doc('weeks/'+mon).set(next))}
+function savePlan(P){const c=Object.assign({},S.cfg,{plan:P});S.cfg=c;return w(()=>db.doc('config/settings').set(c))}
+function initV12(){
+  document.addEventListener('change',async ev=>{
+    const t=ev.target;if(!t.dataset)return;
+    if(t.dataset.pf){savePf(t);if(t.tagName==='SELECT'||t.type==='date')render()}
+    if(t.dataset.att){const mon=t.dataset.wk;const att=Object.assign({},(S.weeks[mon]||{}).att||{});if(t.value)att[t.dataset.att]=t.value;else delete att[t.dataset.att];await saveWeek(mon,{att});render()}
+    if(t.dataset.act==='vmm-file'){
+      const p=S.products[t.dataset.id];const files=[...t.files];t.value='';if(!p||!files.length)return;toast('Saving photo…');
+      const v=vmmOf(p);for(const f of files){try{v.photos.push(await savePhoto(f))}catch(e){toast('That photo couldn’t be saved')}}
+      p.vmm=v;await w(()=>db.doc('products/'+p.id).update({vmm:v}),'Photo added');render();
+    }
+  });
+  document.addEventListener('input',ev=>{
+    const t=ev.target;if(!t.dataset)return;
+    if(t.dataset.pf&&t.tagName!=='SELECT'&&t.type!=='date'){clearTimeout(pfT);pfT=setTimeout(()=>savePf(t),700)}
+    if(t.id==='wk-note'){clearTimeout(pfT);pfT=setTimeout(()=>saveWeek(t.dataset.wk,{note:t.value}),800)}
+  });
+  document.addEventListener('focusout',ev=>{const t=ev.target;if(t&&t.dataset&&t.dataset.pf&&t.tagName!=='SELECT'&&t.type!=='date'){clearTimeout(pfT);savePf(t)}if(t&&t.id==='wk-note'){clearTimeout(pfT);if(((S.weeks[t.dataset.wk]||{}).note||'')!==t.value)saveWeek(t.dataset.wk,{note:t.value})}});
+  document.addEventListener('click',async ev=>{
+    const b=ev.target.closest('[data-act]');if(!b||b.tagName==='INPUT'||b.tagName==='LABEL')return;
+    const a=b.dataset.act,id=b.dataset.id;
+    switch(a){
+      case 'ins-tab':S.ins.tab=b.dataset.k;render();window.scrollTo(0,0);break;
+      case 'ins-cats':S.ins.allCats=!S.ins.allCats;render();break;
+      case 'wk':S.ins.week=addDays(S.ins.week||weekStart(today()),+b.dataset.d);render();break;
+      case 'export-week':exportWeek(b.dataset.wk);break;
+      case 'pview':S.pf.view=b.dataset.k;ls.set('pview',S.pf.view);render();break;
+      case 'tsort':{const ts=S.pf.ts||{k:'recent',d:-1};S.pf.ts=ts.k===b.dataset.k?{k:ts.k,d:-ts.d}:{k:b.dataset.k,d:['weeks','mrp','vmm','gap','recent'].includes(b.dataset.k)?-1:1};render();break}
+      case 'goprod-buyer':S.pf.buyer=b.dataset.v;S.pf.status='all';setTab('products');break;
+      case 'pset':{const p=S.products[id];if(!p)break;const upd=setPath(p,b.dataset.path,b.dataset.v);render();w(()=>db.doc('products/'+id).update(upd));break}
+      case 'vmm-delph':{const p=S.products[id];const v=vmmOf(p);v.photos.splice(+b.dataset.i,1);p.vmm=v;render();w(()=>db.doc('products/'+id).update({vmm:v}));break}
+      case 'pmode':{readPriceEditor();const s=sheetState.pr;const k=b.dataset.k;if(k==='sizes'&&s.mode==='single'&&(s.single.size||s.single.price))s.variants=[Object.assign({},s.single),{size:'',price:''}];if(k==='single'&&s.mode==='sizes'&&s.variants[0])s.single=Object.assign({},s.variants[0]);s.mode=k;$('#pe-box').innerHTML=priceEditorHTML();break}
+      case 'padd':{readPriceEditor();sheetState.pr.variants.push({size:'',price:''});$('#pe-box').innerHTML=priceEditorHTML();const ins=document.querySelectorAll('#pe-box .pe-vs');if(ins.length)ins[ins.length-1].focus();break}
+      case 'pdel':{readPriceEditor();const s=sheetState.pr;s.variants.splice(+b.dataset.i,1);if(!s.variants.length)s.variants.push({size:'',price:''});$('#pe-box').innerHTML=priceEditorHTML();break}
+      case 'rule':{const R=rules();const k=b.dataset.k;const lim=k==='minWeeks'?[1,12]:[0,4];R[k]=Math.max(lim[0],Math.min(lim[1],R[k]+(+b.dataset.d)));const c=Object.assign({},S.cfg,{rules:R});S.cfg=c;render();w(()=>db.doc('config/settings').set(c));break}
+      case 'rule-toggle':{const R=rules();R.noDiscount=!R.noDiscount;const c=Object.assign({},S.cfg,{rules:R});S.cfg=c;render();w(()=>db.doc('config/settings').set(c));break}
+      case 'plan-store':{const P=JSON.parse(JSON.stringify(plan()));const r=P.rounds[+b.dataset.i];const sid=b.dataset.v;r.stores=r.stores.includes(sid)?r.stores.filter(x=>x!==sid):r.stores.concat(sid);await savePlan(P);render();break}
+      case 'plan-this':{const P=JSON.parse(JSON.stringify(plan()));const mon=weekStart(today());P.anchor=addDays(mon,-7*(+b.dataset.i)+3);await savePlan(P);render();toast(P.rounds[+b.dataset.i].name+' round is now this week');break}
+    }
+  });
+}
+
 /* ---------- platform glue ---------- */
 let rT=null;function soon(){clearTimeout(rT);rT=setTimeout(()=>{
   if(!S.ready)return;
-  const ae=document.activeElement;if(ae&&ae.dataset&&ae.dataset.actF)return;
+  const ae=document.activeElement;if(ae&&ae.dataset&&(ae.dataset.actF||ae.dataset.pf||ae.dataset.att))return;if(ae&&ae.id==='wk-note')return;
   if(ae&&(ae.id==='pq'||ae.id==='mem-name'||ae.id==='mem-email'||(ae.id||'').startsWith('add-')))return;render()},150)}
 downloads={save:async({filename,data})=>{const b=data instanceof Blob?data:new Blob([data]);const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),8000);return {status:'saved'}}};
 let _xlsxP=null;
 function loadXLSX(){if(typeof XLSX!=='undefined')return Promise.resolve(true);if(!_xlsxP)_xlsxP=new Promise(res=>{const s=document.createElement('script');s.src='vendor/xlsx.full.min.js';s.onload=()=>res(true);s.onerror=()=>{_xlsxP=null;res(false)};document.head.appendChild(s)});return _xlsxP}
 
 /* ---------- backup & restore ---------- */
-function referencedPhotos(){const set=new Set();Object.values(S.entries).forEach(e=>(e.photos||[]).forEach(r=>set.add(r)));Object.values(S.products).forEach(p=>{if(p.cover)set.add(p.cover)});return [...set]}
+function referencedPhotos(){const set=new Set();Object.values(S.entries).forEach(e=>(e.photos||[]).forEach(r=>set.add(r)));Object.values(S.products).forEach(p=>{if(p.cover)set.add(p.cover);((p.vmm||{}).photos||[]).forEach(r=>set.add(r))});return [...set]}
 async function doBackup(){
   if(typeof JSZip==='undefined'){toast('Backup tools didn’t load. Reload the app.');return}
   const refs=referencedPhotos();toast('Preparing backup…');
   const strip=o=>Object.fromEntries(Object.entries(o).map(([k,v])=>{const c=Object.assign({},v);delete c.id;return [k,c]}));
   const zip=new JSZip();
-  zip.file('data.json',JSON.stringify({app:'shelfwatch',version:1,exportedAt:new Date().toISOString(),collections:{stores:strip(S.stores),products:strip(S.products),entries:strip(S.entries),visits:strip(S.visits),config:{settings:S.cfg}}}));
+  zip.file('data.json',JSON.stringify({app:'shelfwatch',version:1,exportedAt:new Date().toISOString(),collections:{stores:strip(S.stores),products:strip(S.products),entries:strip(S.entries),visits:strip(S.visits),weeks:strip(S.weeks),config:{settings:S.cfg}}}));
   let got=0,missing=0;const ph=zip.folder('photos');
   for(const r of refs){try{const b=await PLATFORM.photoBlob(r);if(b){ph.file(r+'.jpg',b);got++}else missing++}catch(e){missing++}
     if((got+missing)%20===0)toast(`Collecting photos ${got+missing} of ${refs.length}…`)}
@@ -810,7 +1124,7 @@ function planRestore(data){
   const products={};for(const [pid,p] of Object.entries(c.products||{})){const d=Object.assign({},p,{storeId:storeMap[p.storeId]||p.storeId});delete d.id;products[pid]=d}
   const entries={};for(const [eid,e] of Object.entries(c.entries||{})){const nv=e.visitId?(visitMap[e.visitId]||e.visitId):'';const d=Object.assign({},e,{visitId:nv});delete d.id;
     entries[(e.visitId&&eid==='e_'+e.productId+'_'+e.visitId)?'e_'+e.productId+'_'+nv:eid]=d}
-  return {config:c.config||{},stores:newStores,visits,products,entries,report};
+  return {config:c.config||{},stores:newStores,visits,products,entries,weeks:c.weeks||{},report};
 }
 async function previewRestore(f){
   const el=$('#rs-prev');
@@ -826,7 +1140,7 @@ async function previewRestore(f){
 async function doRestore(){
   const st=sheetState;if(!st||!st.data||st.busy)return;st.busy=1;const go=$('#rs-go');
   const c=planRestore(st.data);const photoFiles=Object.keys(st.zip.files).filter(k=>k.startsWith('photos/')&&!st.zip.files[k].dir);
-  const cols=['config','stores','visits','products','entries'];
+  const cols=['config','stores','visits','products','entries','weeks'];
   const total=photoFiles.length+cols.reduce((a,k)=>a+Object.keys(c[k]||{}).length,0);let done=0;
   const tick=()=>{done++;if(done%10===0||done===total)go.textContent=Math.round(done/total*100)+'%'};
   try{
@@ -888,6 +1202,7 @@ document.addEventListener('click',async e=>{
 
 /* ---------- boot ---------- */
 db=PLATFORM.db;
+initV12();
 render();
 (async()=>{
   let r;

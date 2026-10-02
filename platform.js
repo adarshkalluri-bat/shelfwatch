@@ -44,7 +44,9 @@ const PLATFORM=(function(){
   }
 
   /* ---------- write API used by the app (db shim) ---------- */
+  const localAt={},pushedAt={};
   async function write(col,id,data,deleted){
+    localAt[col+'/'+id]=Date.now();
     applyLocal(col,id,data,deleted);
     await iput('docs',{col,id,data:data||{},deleted:!!deleted},col+'/'+id);
     await iput('outbox',{t:'doc',col,id,data:data||{},deleted:!!deleted,at:Date.now()});
@@ -103,6 +105,7 @@ const PLATFORM=(function(){
           // after 5 failures move it aside so it doesn't block everything
           await idel('outbox',op.seq);await iput('meta',op,'stuck:'+op.seq);continue;
         }
+        if(op.t==='doc')pushedAt[op.col+'/'+op.id]=Date.now();
         await idel('outbox',op.seq);st.error='';
       }
     }catch(e){console.warn('flush',e)}
@@ -112,20 +115,25 @@ const PLATFORM=(function(){
   async function pull(){
     if(pulling||!sb||!session||!navigator.onLine)return;pulling=true;st.syncing=true;emit();
     try{
-      const pend=new Set((await iall('outbox')).filter(o=>o.t==='doc').map(o=>o.col+'/'+o.id));
       let since=(await iget('meta','lastSync'))||'1970-01-01T00:00:00Z';
       const start=new Date(new Date(since).getTime()-5000).toISOString();
-      let cursor=start,changed=0,maxSeen=since;
+      let cursor=start,changed=0,maxSeen=since,redo=null;
       for(let page=0;page<50;page++){
+        const t0=Date.now();
         const {data,error}=await sb.from('docs').select('collection,id,data,deleted,updated_at').gt('updated_at',cursor).order('updated_at',{ascending:true}).limit(1000);
         if(error){if(!isNetErr(error))st.error=/row-level|permission/i.test(error.message||'')?'Your email isn’t on the team list yet.':('Sync error: '+error.message);break}
+        // never let a server copy overwrite something changed on this device while the request was in flight
+        const pend=error?new Set():new Set((await iall('outbox')).filter(o=>o.t==='doc').map(o=>o.col+'/'+o.id));
         for(const r of data){
           const k=r.collection+'/'+r.id;
-          if(!pend.has(k)){applyLocal(r.collection,r.id,r.data,r.deleted);await iput('docs',{col:r.collection,id:r.id,data:r.data,deleted:r.deleted},k);changed++}
+          const racing=(localAt[k]||0)>=t0||(pushedAt[k]||0)>=t0;
+          if(racing&&(!redo||r.updated_at<redo))redo=r.updated_at; // look at this row again on the next pass
+          if(!pend.has(k)&&!racing){applyLocal(r.collection,r.id,r.data,r.deleted);await iput('docs',{col:r.collection,id:r.id,data:r.data,deleted:r.deleted},k);changed++}
           if(r.updated_at>maxSeen)maxSeen=r.updated_at;
         }
         if(data.length<1000)break;cursor=data[data.length-1].updated_at;
       }
+      if(redo&&redo<maxSeen)maxSeen=redo;
       await iput('meta',maxSeen,'lastSync');st.lastSync=Date.now();
       if(changed)onChange();
     }catch(e){console.warn('pull',e)}
