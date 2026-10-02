@@ -413,7 +413,7 @@ function viewSettings(){
   h+=listEditor('fixtures','Fixtures',fixtures(),'Quick picks when logging where a product sits');
   h+=listEditor('purposes','Why we track',purposes(),'Quick picks for the reason a product is on the list');
   h+=`<div class="cap">Data</div><div class="group"><button class="row" data-act="export"><span class="grow">Download Excel report</span>${IC.chev}</button><button class="row" data-act="import"><span class="grow">Import from Excel</span>${IC.chev}</button><button class="row" data-act="backup"><span class="grow"><div class="ttl">Download full backup</div><div class="meta">All products, visits and photos in one .zip</div></span>${IC.chev}</button><button class="row" data-act="restore"><span class="grow"><div class="ttl">Restore from backup</div><div class="meta">Load a Shelfwatch .zip into the team’s data</div></span>${IC.chev}</button><button class="row" data-act="goprod" data-status="archived"><span class="grow">Archived products</span><span class="val">${Object.values(S.products).filter(p=>p.archived).length}</span>${IC.chev}</button></div>`;
-  h+=`<p class="foot">Shelfwatch · data is shared live with everyone on the team list.</p>`;
+  h+=`<p class="foot">Shelfwatch version 1.1 · data is shared live with everyone on the team list.</p>`;
   return h;
 }
 function listEditor(k,t,arr,foot){return `<div class="cap">${t}</div><div class="group"><div class="optgrid">${arr.map(x=>`<span class="opt" style="display:inline-flex;gap:6px;align-items:center">${esc(x)}<button data-act="list-del" data-k="${k}" data-v="${esc(x)}" aria-label="Remove ${esc(x)}" style="color:var(--label2)">×</button></span>`).join('')}</div><div class="field"><input id="add-${k}" placeholder="Add ${t.toLowerCase()==='team'?'a name':'an option'}" style="text-align:left"><button class="lnk" data-act="list-add" data-k="${k}">Add</button></div></div><p class="foot">${foot}</p>`}
@@ -787,23 +787,51 @@ function openRestore(){
   <div class="note">Choose a Shelfwatch backup (.zip). Its products, visits and photos are added to the team’s data. Items that already exist with the same ID are replaced by the backup’s version.</div>
   <div style="margin-top:14px"><label class="btn sec2" style="cursor:pointer">${IC.ul} Choose backup file<input type="file" accept=".zip,application/zip" data-act="rs-file" style="display:none"></label></div><div id="rs-prev" style="margin-top:14px"></div></div>`);
 }
+function planRestore(data){
+  const c=data.collections||{};const cmp=s=>norm(s).replace(/ /g,'');
+  const existing=Object.values(S.stores);const storeMap={},newStores={},report=[];
+  for(const [sid,s] of Object.entries(c.stores||{})){
+    const names=[s.name,...(s.aliases||[])].map(cmp).filter(Boolean);
+    const cands=existing.filter(e=>names.includes(cmp(e.name)));
+    let hit=(S.stores[sid]&&names.includes(cmp(S.stores[sid].name))?S.stores[sid]:null)
+      ||cands.find(e=>cmp(e.name)===names[0]&&cmp(e.location)===cmp(s.location))||cands.find(e=>cmp(e.name)===names[0])||cands[0]||null;
+    if(hit){storeMap[sid]=hit.id;report.push({name:s.name,existing:true,as:hit.name+(hit.location?' · '+hit.location:'')})}
+    else{const nid=S.stores[sid]?sid+'-'+Math.random().toString(36).slice(2,6):sid;storeMap[sid]=nid;newStores[nid]={name:s.name,location:s.location||''};report.push({name:s.name,existing:false,as:s.name+(s.location?' · '+s.location:'')})}
+  }
+  const visitMap={},visits={};
+  for(const [vid,v] of Object.entries(c.visits||{})){
+    const nsid=storeMap[v.storeId]||v.storeId;
+    const same=Object.values(S.visits).find(x=>x.storeId===nsid&&x.date===v.date);
+    const nvid=same?same.id:(vid==='v_'+String(v.storeId).slice(0,30)+'_'+v.date?'v_'+nsid.slice(0,30)+'_'+v.date:vid);
+    visitMap[vid]=nvid;const d=Object.assign({},v,{storeId:nsid});delete d.id;
+    if(same){d.attendees=[...new Set([...(same.attendees||[]),...(v.attendees||[])])];d.by=same.by||d.by||'';d.at=same.at||d.at}
+    visits[nvid]=d;
+  }
+  const products={};for(const [pid,p] of Object.entries(c.products||{})){const d=Object.assign({},p,{storeId:storeMap[p.storeId]||p.storeId});delete d.id;products[pid]=d}
+  const entries={};for(const [eid,e] of Object.entries(c.entries||{})){const nv=e.visitId?(visitMap[e.visitId]||e.visitId):'';const d=Object.assign({},e,{visitId:nv});delete d.id;
+    entries[(e.visitId&&eid==='e_'+e.productId+'_'+e.visitId)?'e_'+e.productId+'_'+nv:eid]=d}
+  return {config:c.config||{},stores:newStores,visits,products,entries,report};
+}
 async function previewRestore(f){
   const el=$('#rs-prev');
   try{const zip=await JSZip.loadAsync(f);const df=zip.file('data.json');if(!df)throw new Error('no data');const data=JSON.parse(await df.async('string'));
-    sheetState.zip=zip;sheetState.data=data;const c=data.collections||{};const n=k=>Object.keys(c[k]||{}).length;
+    const plan=planRestore(data);sheetState.zip=zip;sheetState.plan=plan;sheetState.data=data;const n=k=>Object.keys(plan[k]||{}).length;
     const photos=Object.keys(zip.files).filter(k=>k.startsWith('photos/')&&!zip.files[k].dir).length;
-    el.innerHTML=`<div class="group"><div class="row"><span class="grow">Products</span><span class="val">${n('products')}</span></div><div class="row"><span class="grow">Updates</span><span class="val">${n('entries')}</span></div><div class="row"><span class="grow">Visits</span><span class="val">${n('visits')}</span></div><div class="row"><span class="grow">Stores</span><span class="val">${n('stores')}</span></div><div class="row"><span class="grow">Photos</span><span class="val">${photos}</span></div></div>`;
+    const have=Object.keys(plan.products).filter(id=>S.products[id]).length;
+    el.innerHTML=`<div class="group"><div class="row"><span class="grow">Products</span><span class="val">${n('products')}${have?' ('+have+' already here, will be replaced)':''}</span></div><div class="row"><span class="grow">Updates</span><span class="val">${n('entries')}</span></div><div class="row"><span class="grow">Visits</span><span class="val">${n('visits')}</span></div><div class="row"><span class="grow">Photos</span><span class="val">${photos}</span></div></div>
+    ${plan.report.length?`<div class="cap">Stores in this file</div><div class="group">${plan.report.map(r=>`<div class="row"><span class="grow"><div class="ttl">${esc(r.name)}</div><div class="meta">${r.existing?'Already in the app as '+esc(r.as):'Will be added as '+esc(r.as)}</div></span><span class="pill ${r.existing?'good':'tint'}">${r.existing?'Matched':'New'}</span></div>`).join('')}</div>`:''}`;
     const b=$('#rs-go');b.disabled=false;b.style.opacity=1;
-  }catch(e){el.innerHTML=`<div class="note" style="color:var(--bad)">This isn’t a Shelfwatch backup file.</div>`}
+  }catch(e){console.warn(e);el.innerHTML=`<div class="note" style="color:var(--bad)">This isn’t a Shelfwatch backup file.</div>`}
 }
 async function doRestore(){
   const st=sheetState;if(!st||!st.data||st.busy)return;st.busy=1;const go=$('#rs-go');
-  const c=st.data.collections||{};const photoFiles=Object.keys(st.zip.files).filter(k=>k.startsWith('photos/')&&!st.zip.files[k].dir);
-  const total=photoFiles.length+['stores','visits','products','entries','config'].reduce((a,k)=>a+Object.keys(c[k]||{}).length,0);let done=0;
+  const c=planRestore(st.data);const photoFiles=Object.keys(st.zip.files).filter(k=>k.startsWith('photos/')&&!st.zip.files[k].dir);
+  const cols=['config','stores','visits','products','entries'];
+  const total=photoFiles.length+cols.reduce((a,k)=>a+Object.keys(c[k]||{}).length,0);let done=0;
   const tick=()=>{done++;if(done%10===0||done===total)go.textContent=Math.round(done/total*100)+'%'};
   try{
     for(const k of photoFiles){const ref=k.slice(7).replace(/\.jpe?g$/i,'');const raw=await st.zip.file(k).async('blob');await PLATFORM.putPhoto(ref,new Blob([raw],{type:'image/jpeg'}),true);tick()}
-    for(const col of ['config','stores','visits','products','entries']){for(const [id,d] of Object.entries(c[col]||{})){const x=Object.assign({},d);delete x.id;await PLATFORM.write(col,id,x,false);tick()}}
+    for(const col of cols){for(const [id,d] of Object.entries(c[col]||{})){await PLATFORM.write(col,id,d,false);tick()}}
     toast('Restored. Uploading to the team in the background.');closeSheet();setTab('products');
   }catch(e){console.warn(e);toast('Restore stopped: '+(e.message||'error'));st.busy=0;go.textContent='Restore'}
 }
