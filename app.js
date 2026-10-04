@@ -66,7 +66,7 @@ function photoSrc(ref){return PLATFORM.photoUrl(ref)}
 const img=(ref,cls,extra)=>ref?`<img ${cls?`class="${cls}"`:''} data-ph="${esc(ref)}" src="${esc(photoSrc(ref))}" alt="" loading="lazy" ${extra||''}>`:'';
 
 /* ---------- v1.2: rules, pricing, weekly plan, VMM plan ---------- */
-const APP_VERSION='1.2';
+const APP_VERSION='1.3';
 const rules=()=>Object.assign({minWeeks:4,needSignals:2,noDiscount:true},S.cfg.rules||{});
 const REASONS=['Vendor meeting','Leave','Office work','Other store visit'];
 const reasons=()=>(S.cfg.reasons&&S.cfg.reasons.length?S.cfg.reasons:REASONS);
@@ -80,6 +80,7 @@ const PIPE={watching:['Watching',''],candidate:['Candidate','tint'],decide:['Bes
 const PIPE_ORDER=['watching','candidate','decide','pursue','wip','launched','notpursuing','dropped'];
 const PIPE_LONG={watching:'Watching',candidate:'Candidate',decide:'Awaiting decision',pursue:'Pursuing',wip:'In development',launched:'Launched',notpursuing:'Not pursuing',dropped:'Dropped'};
 
+/* ---------- v1.3: week-by-week grid, update banner ---------- */
 
 /* ---------- derived ---------- */
 function entriesOf(pid){return Object.values(S.entries).filter(e=>e.productId===pid).sort((a,b)=>(a.date||'').localeCompare(b.date||'')||(a.at||0)-(b.at||0))}
@@ -408,8 +409,8 @@ function viewInsights(){
   let h=topbar('Insights')+`<h1 class="lt">Insights</h1>`;
   if(!S.ready)return h+notReady();
   const tab=S.ins.tab||'review';
-  h+=`<div class="seg" style="margin:4px 0 14px">${[['review','Review'],['weekly','Weekly report'],['pipeline','Pipeline']].map(([k,l])=>`<button data-act="ins-tab" data-k="${k}" class="${tab===k?'on':''}">${l}</button>`).join('')}</div>`;
-  return h+(tab==='weekly'?insWeekly():tab==='pipeline'?insPipeline():insReview());
+  h+=`<div class="seg auto" style="margin:4px 0 14px">${[['review','Review'],['byweek','Week by week'],['weekly','Weekly report'],['pipeline','Pipeline']].map(([k,l])=>`<button data-act="ins-tab" data-k="${k}" class="${tab===k?'on':''}">${l}</button>`).join('')}</div>`;
+  return h+(tab==='weekly'?insWeekly():tab==='pipeline'?insPipeline():tab==='byweek'?insByWeek():insReview());
 }
 function countChanges(es,k){let n=0;const by={};es.forEach(e=>(by[e.productId]=by[e.productId]||[]).push(e));for(const a of Object.values(by)){a.sort((x,y)=>(x.date||'').localeCompare(y.date||''));for(let i=1;i<a.length;i++)if(diff(a[i-1],a[i]).some(c=>c.k===k))n++}return n}
 
@@ -1070,6 +1071,59 @@ function initV12(){
     }
   });
 }
+function insByWeek(){
+  const P=plan();const f=S.ins;const stores=Object.values(S.stores).sort((a,b)=>a.name.localeCompare(b.name));
+  const lastDate=(lastVisitAny()||{}).date||today();
+  const opts=[...P.rounds.map((r,i)=>['r'+i,r.name+' round']),...stores.map(s=>['s'+s.id,s.name+(s.location?' '+s.location:'')])];
+  let scope=f.bw||('r'+roundIndex(weekStart(lastDate)));
+  if(!opts.some(o=>o[0]===scope))scope=opts.length?opts[0][0]:'';
+  const sids=scope[0]==='r'?((P.rounds[+scope.slice(1)]||{stores:[]}).stores):[scope.slice(1)];
+  const buyer=f.bwBuyer||'all';
+  let h=`<div class="chips">${opts.map(([k,l])=>`<button class="chip ${scope===k?'on':''}" data-act="bw-scope" data-v="${esc(k)}">${esc(l)}</button>`).join('')}</div>`;
+  h+=`<div class="chips" style="margin-top:6px">${[['all','Everyone'],...team().map(t=>[t,t])].map(([k,l])=>`<button class="chip ${buyer===k?'on':''}" data-act="bw-buyer" data-v="${esc(k)}">${esc(l)}</button>`).join('')}</div>`;
+  const prods=activeProducts().filter(p=>sids.includes(p.storeId)&&(buyer==='all'||p.buyer===buyer)).sort((a,b)=>(a.buyer||'').localeCompare(b.buyer||'')||storeShort(a.storeId).localeCompare(storeShort(b.storeId))||a.name.localeCompare(b.name));
+  const wk={};prods.forEach(p=>ents(p.id).forEach(e=>{const m=weekStart(e.date);const x=wk[m]=wk[m]||{dates:new Set(),n:0};x.dates.add(e.date);x.n++}));
+  let cols=Object.keys(wk).sort();const total=cols.length;const MAXC=6;if(!f.bwAll&&cols.length>MAXC)cols=cols.slice(-MAXC);
+  if(!prods.length||!cols.length)return h+emptyState('Nothing logged here yet','Pick another round or store, or log a visit to start the week-by-week record.');
+  h+=`<div style="display:flex;justify-content:space-between;align-items:center;margin:14px 2px 8px;gap:10px"><span class="foot" style="margin:0">${prods.length} product${prods.length===1?'':'s'} · ${cols.length===total?total+' visit week'+(total===1?'':'s'):'latest '+cols.length+' of '+total+' visit weeks'}</span>${total>MAXC?`<button class="lnk" style="font-size:15px;padding:0" data-act="bw-all">${f.bwAll?'Latest '+MAXC+' weeks only':'Show all weeks'}</button>`:''}</div>`;
+  h+=`<div class="tbl bw" id="bw"><table><thead><tr><th class="st">Product</th>${cols.map(m=>{const ds=[...wk[m].dates].sort();return `<th><b>${esc(ds.map(d=>fd(d,'dow')).join(', '))}</b><span>${wk[m].n} of ${prods.length} checked</span></th>`}).join('')}</tr></thead><tbody>`;
+  let lastB=null;
+  for(const p of prods){
+    if(p.buyer!==lastB){lastB=p.buyer;const n=prods.filter(x=>x.buyer===p.buyer).length;h+=`<tr class="grp"><td colspan="${cols.length+1}"><div class="gl"><span class="av" style="width:22px;height:22px;font-size:9px;background:${avColor(p.buyer||'?')}">${esc(initials(p.buyer||'?'))}</span>${esc(p.buyer||'No buyer set')} · ${n} product${n===1?'':'s'}</div></td></tr>`}
+    const a=ents(p.id);const b=badge(p);const first=p.firstSeen||(a[0]||{}).date||'';
+    h+=`<tr><td class="st"><button data-act="product" data-id="${p.id}"><span class="thumb" style="width:44px;height:44px">${img(cover(p))||IC.img}</span><b>${esc(p.name)}</b><span class="sub2">${esc(storeShort(p.storeId))}${p.category?' · '+esc(p.category.replace(/^HH_/,'')):''}</span>${b.k!=='watching'?`<span class="pill ${b.tone}">${esc(b.label)}</span>`:''}</button></td>`;
+    for(const m of cols){
+      const end=addDays(m,6);const es=a.filter(e=>e.date>=m&&e.date<=end);const e=es[es.length-1];
+      if(!e){h+=`<td class="cell none">${first&&first>end?'Not tracked yet':'Not checked'}</td>`;continue}
+      const i=a.indexOf(e);const pv=i>0?a[i-1]:null;const ch=diff(pv,e).filter(c=>c.k!=='obs'&&c.k!=='status');const same=!!pv&&norm(e.observation)===norm(pv.observation);
+      const st=e.status&&e.status!=='on-floor'?STATUS_BY[e.status]:null;const stx=sizeText(e);
+      h+=`<td class="cell" data-act="product" data-id="${p.id}">${e.photos&&e.photos.length?`<div class="cimg">${img(e.photos[0])}${e.photos.length>1?`<i>+${e.photos.length-1}</i>`:''}</div>`:''}<div class="cp">${stx?esc(stx):'<span style="color:var(--warn);font-weight:500">Price needed</span>'}</div>${(st||ch.length)?`<div class="chg">${st?`<span class="pill ${st.tone}">${esc(st.label)}</span>`:''}${ch.map(c=>`<span class="pill ${c.k==='price'?(c.dir==='up'?'bad':c.dir==='down'?'good':'tint'):'tint'}">${c.k==='price'?'Price ':c.k==='fixture'?'Moved: ':''}${esc(c.t)}</span>`).join('')}</div>`:''}<div class="co ${same||!e.observation?'same':''}">${e.observation?esc(e.observation):'No note'}</div>${e.fixture?`<div class="cf">${esc(e.fixture)}</div>`:''}</td>`;
+    }
+    h+=`</tr>`;
+  }
+  h+=`</tbody></table></div><p class="foot">Each column is one visit week, oldest on the left. Coloured labels show what changed since the visit before, and a greyed note means it’s the same as last time. Tap any cell to open the product.</p>`;
+  setTimeout(()=>{const b=$('#bw');if(b&&!b.dataset.s){b.scrollLeft=b.scrollWidth;b.dataset.s='1'}},0);
+  return h;
+}
+function showUpdate(){
+  if($('#updbar'))return;const b=document.createElement('button');b.id='updbar';b.className='upd';b.textContent='New version ready. Tap to update.';
+  b.addEventListener('click',()=>location.reload());document.body.appendChild(b);
+}
+function initV13(){
+  document.addEventListener('click',ev=>{
+    const b=ev.target.closest('[data-act]');if(!b)return;
+    switch(b.dataset.act){
+      case 'bw-scope':S.ins.bw=b.dataset.v;render();break;
+      case 'bw-buyer':S.ins.bwBuyer=b.dataset.v;render();break;
+      case 'bw-all':S.ins.bwAll=!S.ins.bwAll;render();break;
+    }
+  });
+  if('serviceWorker' in navigator){
+    const had=!!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('message',e=>{if(e.data&&e.data.type==='update')showUpdate()});
+    navigator.serviceWorker.addEventListener('controllerchange',()=>{if(had)showUpdate()});
+  }
+}
 
 /* ---------- platform glue ---------- */
 let rT=null;function soon(){clearTimeout(rT);rT=setTimeout(()=>{
@@ -1203,6 +1257,7 @@ document.addEventListener('click',async e=>{
 /* ---------- boot ---------- */
 db=PLATFORM.db;
 initV12();
+initV13();
 render();
 (async()=>{
   let r;

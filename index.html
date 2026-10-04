@@ -314,6 +314,39 @@ button.note{font:inherit;color:var(--label2)}
 .vm .field label{width:132px}
 .facts .d.up{color:var(--bad)}.facts .d.down{color:var(--good)}
 .app:has(.ptbl){max-width:1360px}
+
+/* v1.3 */
+.seg.auto button{flex:1 1 auto;padding:6px 6px}
+.bw{max-height:calc(100vh - 150px);overflow:auto;-webkit-overflow-scrolling:touch}
+.bw table{min-width:0;width:auto;border-collapse:separate;border-spacing:0;font-size:13.5px}
+.bw th{position:sticky;top:0;z-index:3;background:var(--card);text-align:left;vertical-align:bottom;min-width:176px;max-width:210px;border-bottom:.5px solid var(--sep);border-left:.5px solid var(--sep)}
+.bw th b{display:block;color:var(--label);font-size:14px;font-weight:600}
+.bw th span{font-weight:500}
+.bw .st{position:sticky;left:0;z-index:2;background:var(--card);min-width:132px;max-width:132px;width:132px;border-left:0}
+.bw thead .st{z-index:4}
+.bw td{border-bottom:.5px solid var(--sep);border-left:.5px solid var(--sep);vertical-align:top;padding:10px}
+.bw td.st{border-left:0;box-shadow:1px 0 0 var(--sep)}
+.bw td.st button{display:flex;flex-direction:column;align-items:flex-start;gap:4px;text-align:left;width:100%}
+.bw td.st b{font-size:13.5px;line-height:1.25;overflow-wrap:anywhere}
+.bw td.st .sub2{font-size:12px;color:var(--label2);overflow-wrap:anywhere}
+.bw td.st .pill{font-size:11px;padding:2px 7px}
+.bw .grp td{background:var(--card2);padding:7px 10px;font-weight:600;font-size:13px;border-left:0}
+.bw .gl{position:sticky;left:10px;display:inline-flex;align-items:center;gap:8px}
+.bw .cell{min-width:176px;max-width:210px;cursor:pointer}
+.bw .cell:hover{background:var(--fill2)}
+.bw .cell.none{color:var(--label3);font-size:13px;cursor:default;background:repeating-linear-gradient(135deg,transparent 0 7px,var(--fill2) 7px 8px)}
+.bw .cimg{position:relative;width:100%;height:96px;border-radius:8px;overflow:hidden;background:var(--fill);margin-bottom:7px}
+.bw .cimg img{width:100%;height:100%;object-fit:cover;display:block}
+.bw .cimg i{position:absolute;right:5px;bottom:5px;background:rgba(0,0,0,.55);color:#fff;font-style:normal;font-size:11px;font-weight:600;padding:1px 6px;border-radius:999px}
+.bw .cp{font-weight:600;font-variant-numeric:tabular-nums;line-height:1.3}
+.bw .chg{margin-top:5px;gap:4px}
+.bw .chg .pill{font-size:11.5px;padding:2px 7px;white-space:normal;border-radius:8px}
+.bw .co{margin-top:5px;line-height:1.35;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.bw .co.same{color:var(--label3)}
+.bw .cf{margin-top:4px;font-size:12px;color:var(--label2)}
+@media(min-width:760px){.bw table{width:100%}.bw .st{min-width:210px;max-width:210px;width:210px}.bw th,.bw .cell{min-width:210px;max-width:none}.bw .cimg{height:120px;max-width:260px}}
+.app:has(.bw){max-width:1360px}
+.upd{position:fixed;top:calc(10px + env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%);z-index:99;background:var(--tint);color:#fff;font-weight:600;font-size:14.5px;padding:10px 16px;border-radius:999px;box-shadow:0 6px 20px rgba(0,0,0,.25);max-width:calc(100% - 32px)}
 </style>
 </head>
 <body>
@@ -337,6 +370,6 @@ button.note{font:inherit;color:var(--label2)}
 <script src="vendor/jszip.min.js"></script>
 <script src="platform.js"></script>
 <script src="app.js"></script>
-<script>if('serviceWorker' in navigator&&location.protocol==='https:'){window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}))}</script>
+<script>if('serviceWorker' in navigator&&(location.protocol==='https:'||location.hostname==='127.0.0.1'||location.hostname==='localhost')){window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}))}</script>
 </body>
 </html>
